@@ -158,12 +158,17 @@ impl Shell {
         }
     }
 
-    fn open_named(&mut self, name: &str) {
-        // Single-instance for all but notes (notes arrives in W2).
-        if name != "notes" {
-            if let Some(i) = self.windows.iter().position(|w| {
-                w.app.title().eq_ignore_ascii_case(name)
-            }) {
+    pub fn open_named(&mut self, name: &str) {
+        // Notes: focus most recent if open and unfocused; open another if
+        // it's already focused (or none open). Others: single instance.
+        let existing = self.windows.iter().rposition(|w| {
+            let t = w.app.title();
+            t.eq_ignore_ascii_case(name)
+                || (name == "clock" && t == "Timer")
+        });
+        if let Some(i) = existing {
+            let already_focused = i == self.focus;
+            if !(name == "notes" && already_focused) {
                 let win = self.windows.remove(i);
                 self.windows.push(win);
                 self.focus = self.windows.len() - 1;
@@ -172,7 +177,24 @@ impl Shell {
         }
         match name {
             "terminal" => self.open(Box::new(crate::apps::terminal::TerminalApp::new())),
+            "notes" => self.open(Box::new(crate::apps::notes::NotesApp::new())),
+            "monitor" => self.open(Box::new(crate::apps::monitor::MonitorApp::new())),
+            "clock" => self.open(Box::new(crate::apps::clock::ClockApp::new())),
             _ => {}
+        }
+    }
+
+    /// Per-frame stats feed for any open monitor window.
+    pub fn stats_tick(&mut self, events: u32) {
+        let now = timer::uptime_ms();
+        for win in &mut self.windows {
+            if let Some(mon) = win
+                .app
+                .as_any()
+                .downcast_mut::<crate::apps::monitor::MonitorApp>()
+            {
+                mon.tick(now, events);
+            }
         }
     }
 
@@ -203,9 +225,10 @@ impl Shell {
             .map(|&(name, _)| {
                 (
                     name,
-                    self.windows
-                        .iter()
-                        .any(|w| w.app.title().eq_ignore_ascii_case(name)),
+                    self.windows.iter().any(|w| {
+                        let t = w.app.title();
+                        t.eq_ignore_ascii_case(name) || (name == "clock" && t == "Timer")
+                    }),
                 )
             })
             .collect();

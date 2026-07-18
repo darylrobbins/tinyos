@@ -137,6 +137,7 @@ fn kmain(mut fb: FbInfo, memory_map: MemoryMapOwned) -> ! {
         events.clear();
         input.poll(&mut events);
         shell.handle(&events);
+        shell.stats_tick(events.len() as u32);
 
         shell.compose(&mut surface, &mut fonts);
         surface.present(&fb);
