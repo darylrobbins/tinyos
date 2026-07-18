@@ -1,16 +1,21 @@
-//! Command palette: Ctrl+K launcher/switcher with inline answers.
+//! The Meridian launcher: Ctrl+K glass sheet — ask-anything input,
+//! suggested actions, app grid, and session footer.
 
 use alloc::format;
 use alloc::string::{String, ToString};
 
 use crate::drivers::input::keys;
 use crate::gfx::font::Fonts;
-use crate::gfx::surface::{argb, Surface};
+use crate::gfx::surface::{lerp, Surface};
 
+use super::dock;
 use super::tokens::*;
 
-pub const BAR_W: i32 = 620;
-pub const BAR_H: i32 = 52;
+pub const SUGGESTIONS: [(&str, &str); 3] = [
+    ("Open the system monitor", "monitor"),
+    ("Start a 5 minute timer", "timer 5m"),
+    ("Calculate  = 240/8", "= 240/8"),
+];
 
 pub enum Action {
     None,
@@ -20,7 +25,15 @@ pub enum Action {
     Help,
     Calc(String),
     Timer(u64),
+    Lock,
     Unknown(String),
+}
+
+pub enum LauncherHit {
+    Suggestion(usize),
+    App(&'static str),
+    Lock,
+    Inside,
 }
 
 pub struct Palette {
@@ -82,7 +95,13 @@ impl Palette {
         }
     }
 
-    /// Parse and clear the input; the Deck acts on the result.
+    /// Submit an arbitrary command string (used by suggestion rows).
+    pub fn submit_text(&mut self, cmd: &str) -> Action {
+        self.input = String::from(cmd);
+        self.cursor = self.input.chars().count();
+        self.submit()
+    }
+
     pub fn submit(&mut self) -> Action {
         let cmd = self.input.trim().to_string();
         self.input.clear();
@@ -118,6 +137,7 @@ impl Palette {
                 _ => "clock",
             }),
             "close" => Action::CloseFocused,
+            "lock" => Action::Lock,
             "help" => Action::Help,
             _ => {
                 self.hint = Some(format!("no such command: {cmd} \u{2014} try help"));
@@ -126,47 +146,151 @@ impl Palette {
         }
     }
 
-    pub fn draw(&self, s: &mut Surface, fonts: &mut Fonts, screen_w: i32, now_ms: u64) {
+    // ---- Geometry (shared by draw and hit_test) ----
+
+    fn rect(screen: (i32, i32)) -> (i32, i32, i32, i32) {
+        let w = 880.min(screen.0 - 80);
+        let h = 74 + 28 + 3 * 40 + 28 + 100 + 46;
+        ((screen.0 - w) / 2, screen.1 - 110 - h, w, h)
+    }
+
+    fn suggestion_y(py: i32, i: i32) -> i32 {
+        py + 74 + 28 + i * 40
+    }
+
+    fn app_tile(screen: (i32, i32), i: i32) -> (i32, i32, i32, i32) {
+        let (px, py, pw, _) = Self::rect(screen);
+        let n = dock::APPS.len() as i32;
+        let cell = (pw - 44) / n;
+        let ty = py + 74 + 28 + 3 * 40 + 28;
+        (px + 22 + i * cell + (cell - 52) / 2, ty, 52, 84)
+    }
+
+    pub fn hit_test(&self, pxy: (i32, i32), screen: (i32, i32)) -> Option<LauncherHit> {
+        if !self.open {
+            return None;
+        }
+        let (px, py, pw, ph) = Self::rect(screen);
+        if !(pxy.0 >= px && pxy.0 < px + pw && pxy.1 >= py && pxy.1 < py + ph) {
+            return None;
+        }
+        for i in 0..SUGGESTIONS.len() as i32 {
+            let sy = Self::suggestion_y(py, i);
+            if pxy.1 >= sy && pxy.1 < sy + 40 && pxy.0 >= px + 12 && pxy.0 < px + pw - 12 {
+                return Some(LauncherHit::Suggestion(i as usize));
+            }
+        }
+        for (i, (name, _, _)) in dock::APPS.iter().enumerate() {
+            let (tx, ty, tw, th) = Self::app_tile(screen, i as i32);
+            if pxy.0 >= tx && pxy.0 < tx + tw && pxy.1 >= ty && pxy.1 < ty + th {
+                return Some(LauncherHit::App(name));
+            }
+        }
+        // Footer lock button.
+        let (lx, ly) = (px + pw - 84, py + ph - 37);
+        if pxy.0 >= lx && pxy.0 < lx + 64 && pxy.1 >= ly && pxy.1 < ly + 28 {
+            return Some(LauncherHit::Lock);
+        }
+        Some(LauncherHit::Inside)
+    }
+
+    pub fn draw(
+        &self,
+        s: &mut Surface,
+        fonts: &mut Fonts,
+        backdrop: &Surface,
+        screen: (i32, i32),
+        now_ms: u64,
+    ) {
         if !self.open {
             return;
         }
-        let x = (screen_w - BAR_W) / 2;
-        let y = STATUS_H + 96;
-        // The panel grows to hold the hint line inside it.
-        let panel_h = if self.hint.is_some() { BAR_H + 30 } else { BAR_H };
+        let (px, py, pw, ph) = Self::rect(screen);
+        s.frosted_panel(backdrop, px, py, pw, ph, RADIUS_PILL, GLASS_TINT);
 
-        // Soft shadow + surface.
-        for i in 0..4 {
-            let spread = 4 * (i + 1);
-            s.fill_rounded_rect(
-                x - spread / 2,
-                y - spread / 2 + 4,
-                BAR_W + spread,
-                panel_h + spread,
-                RADIUS + spread / 2,
-                argb(10, 0, 0, 0),
+        // Header: orb + input + kbd chip.
+        let oy = py + 20;
+        for row in 0..34 {
+            let c = lerp(ACC, HUE_VIOLET, (row * 255 / 34) as u32);
+            s.fill_rect(px + 22, oy + row, 34, 1, c);
+        }
+        let (gw, _) = fonts.ui_semibold.measure("*", 16.0);
+        fonts
+            .ui_semibold
+            .draw(s, "*", 16.0, px + 22 + (34 - gw) / 2, oy + 8, ORB_TX);
+
+        let ix = px + 70;
+        if self.input.is_empty() {
+            fonts.ui.draw(
+                s,
+                "Ask tinyOS anything \u{2014} run, open, calculate\u{2026}",
+                17.0,
+                ix,
+                oy + 6,
+                TX3,
             );
+        } else {
+            fonts.ui.draw(s, &self.input, 17.0, ix, oy + 6, TX);
         }
-        s.fill_rounded_rect(x, y, BAR_W, panel_h, RADIUS, SURFACE_HI);
-        s.fill_rect(x + RADIUS, y, BAR_W - 2 * RADIUS, 1, STROKE);
-        s.fill_rect(x + RADIUS, y + panel_h - 1, BAR_W - 2 * RADIUS, 1, STROKE);
-        s.fill_rect(x, y + RADIUS, 1, panel_h - 2 * RADIUS, STROKE);
-        s.fill_rect(x + BAR_W - 1, y + RADIUS, 1, panel_h - 2 * RADIUS, STROKE);
-
-        fonts.mono.draw(s, ">", 17.0, x + 18, y + 16, TEXT_DIM);
-        fonts.mono.draw(s, &self.input, 17.0, x + 38, y + 16, TEXT);
-
         if now_ms / 530 % 2 == 0 {
-            let cx = x + 38 + self.cursor as i32 * 10;
-            s.fill_rect(cx, y + 13, 2, BAR_H - 26, ACCENT);
+            let (tw, _) = fonts.ui.measure(&self.input, 17.0);
+            let caret_x = if self.input.is_empty() { ix } else { ix + tw + 2 };
+            s.fill_rect(caret_x, oy + 4, 2, 26, ACC);
         }
+        fonts.mono.draw(s, "^K", 11.0, px + pw - 48, oy + 10, TX3);
+        s.fill_rect(px + 1, py + 74 - 1, pw - 2, 1, STROKE);
+
+        // Suggested.
+        fonts.mono.draw(s, "SUGGESTED", 11.0, px + 22, py + 82, TX3);
+        for (i, (label, _)) in SUGGESTIONS.iter().enumerate() {
+            let sy = Self::suggestion_y(py, i as i32);
+            fonts.ui_semibold.draw(s, "*", 15.0, px + 27, sy + 10, ACC);
+            fonts.ui.draw(s, label, 13.5, px + 52, sy + 9, TX);
+        }
+
+        // Apps grid.
+        let ay = Self::suggestion_y(py, 3);
+        fonts.mono.draw(s, "APPS", 11.0, px + 22, ay + 4, TX3);
+        for (i, (name, glyph, hue)) in dock::APPS.iter().enumerate() {
+            let (tx, ty, tw, _) = Self::app_tile(screen, i as i32);
+            s.fill_rounded_rect(tx + (tw - 46) / 2, ty + 6, 46, 46, RADIUS_TILE, CARD2);
+            let (gw, _) = fonts.mono.measure(glyph, 15.0);
+            fonts
+                .mono
+                .draw(s, glyph, 15.0, tx + (tw - gw) / 2, ty + 19, *hue);
+            let cap = capitalize(name);
+            let (cw, _) = fonts.ui.measure(&cap, 11.5);
+            fonts
+                .ui
+                .draw(s, &cap, 11.5, tx + (tw - cw) / 2, ty + 60, TX2);
+        }
+
+        // Footer.
+        let fy = py + ph - 46;
+        s.fill_rect(px + 1, fy, pw - 2, 1, STROKE);
+        fonts.mono.draw(
+            s,
+            "daryl \u{00b7} tinyOS 0.1 \u{201c}meridian\u{201d}",
+            11.5,
+            px + 22,
+            fy + 16,
+            TX2,
+        );
+        let (lx, ly) = (px + pw - 84, fy + 9);
+        s.fill_rounded_rect(lx, ly, 64, 28, 8, CARD);
+        let (lw, _) = fonts.ui.measure("Lock", 12.0);
+        fonts.ui.draw(s, "Lock", 12.0, lx + (64 - lw) / 2, ly + 6, TX2);
 
         if let Some(hint) = &self.hint {
-            s.fill_rect(x + 16, y + BAR_H, BAR_W - 32, 1, STROKE);
-            fonts
-                .ui_medium
-                .draw(s, hint, 13.0, x + 18, y + BAR_H + 7, TEXT_DIM);
+            fonts.ui.draw(s, hint, 12.0, px + 70, py + 48, TX3);
         }
     }
 }
 
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        None => String::new(),
+    }
+}

@@ -4,7 +4,9 @@ pub mod app;
 pub mod calc;
 pub mod clockpill;
 pub mod dock;
+pub mod lockscreen;
 pub mod palette;
+pub mod quick;
 pub mod tokens;
 pub mod wallpaper;
 
@@ -17,7 +19,7 @@ use crate::gfx::font::Fonts;
 use crate::gfx::surface::{argb, with_alpha, Surface};
 
 use self::app::{App, Rect};
-use self::palette::{Action, Palette};
+use self::palette::{Action, LauncherHit, Palette};
 use self::tokens::*;
 use super::cursor;
 
@@ -96,6 +98,7 @@ pub struct Shell {
     drag: Option<(i32, i32, DragKind)>,
     palette: Palette,
     quick_open: bool,
+    locked: bool,
 }
 
 impl Shell {
@@ -117,6 +120,7 @@ impl Shell {
             drag: None,
             palette: Palette::new(),
             quick_open: false,
+            locked: false,
         };
         shell.open(Box::new(crate::apps::terminal::TerminalApp::new()));
         shell
@@ -142,6 +146,16 @@ impl Shell {
     }
 
     pub fn handle(&mut self, events: &[Event]) {
+        if self.locked {
+            for ev in events {
+                if let Event::Key { code, down: true } = *ev {
+                    if code == keys::ENTER {
+                        self.locked = false;
+                    }
+                }
+            }
+            return;
+        }
         for ev in events {
             match *ev {
                 Event::PointerX(v) => {
@@ -199,6 +213,52 @@ impl Shell {
 
     fn on_click(&mut self) {
         let (px, py) = self.pointer;
+
+        if self.palette.open {
+            match self.palette.hit_test((px, py), (self.width, self.height)) {
+                Some(LauncherHit::Suggestion(i)) => {
+                    let cmd = palette::SUGGESTIONS[i].1;
+                    let action = self.palette.submit_text(cmd);
+                    self.act(action);
+                    return;
+                }
+                Some(LauncherHit::App(name)) => {
+                    self.open_named(name);
+                    self.palette.dismiss();
+                    return;
+                }
+                Some(LauncherHit::Lock) => {
+                    self.palette.dismiss();
+                    self.locked = true;
+                    return;
+                }
+                Some(LauncherHit::Inside) => return,
+                None => {
+                    self.palette.dismiss();
+                    return;
+                }
+            }
+        }
+        if self.quick_open {
+            match quick::hit_test((px, py), (self.width, self.height)) {
+                Some(Some(quick::QuickHit::Lock)) => {
+                    self.quick_open = false;
+                    self.locked = true;
+                    return;
+                }
+                Some(Some(quick::QuickHit::Timer)) => {
+                    self.start_timer(300);
+                    self.quick_open = false;
+                    return;
+                }
+                Some(Some(quick::QuickHit::About)) => return,
+                Some(None) => return,
+                None => {
+                    self.quick_open = false;
+                    // fall through so the click still lands
+                }
+            }
+        }
 
         for i in (0..self.windows.len()).rev() {
             if self.windows[i].hidden || !self.windows[i].rect.contains(px, py) {
@@ -374,20 +434,28 @@ impl Shell {
                 });
             }
             Action::Timer(secs) => {
-                self.open_named("clock");
-                if let Some(win) = self.windows.get_mut(self.focus) {
-                    if let Some(clock) = win
-                        .app
-                        .as_any()
-                        .downcast_mut::<crate::apps::clock::ClockApp>()
-                    {
-                        clock.start_timer(secs);
-                    }
-                }
+                self.start_timer(secs);
                 self.palette.dismiss();
+            }
+            Action::Lock => {
+                self.palette.dismiss();
+                self.locked = true;
             }
             Action::Dismiss => self.palette.dismiss(),
             Action::None | Action::Unknown(_) => {}
+        }
+    }
+
+    fn start_timer(&mut self, secs: u64) {
+        self.open_named("clock");
+        if let Some(win) = self.windows.get_mut(self.focus) {
+            if let Some(clock) = win
+                .app
+                .as_any()
+                .downcast_mut::<crate::apps::clock::ClockApp>()
+            {
+                clock.start_timer(secs);
+            }
         }
     }
 
@@ -407,8 +475,14 @@ impl Shell {
 
     fn on_key_down(&mut self, code: u16) {
         const KEY_K: u16 = 37;
+        const KEY_L: u16 = 38;
         if self.ctrl {
             match code {
+                KEY_L => {
+                    self.locked = true;
+                    self.palette.dismiss();
+                    self.quick_open = false;
+                }
                 KEY_K => {
                     if self.palette.open {
                         self.palette.dismiss()
@@ -447,8 +521,12 @@ impl Shell {
     }
 
     pub fn compose(&mut self, s: &mut Surface, fonts: &mut Fonts) {
-        s.copy_from(&self.wallpaper);
         let now = timer::uptime_ms();
+        if self.locked {
+            lockscreen::draw(s, fonts, &self.wallpaper, now);
+            return;
+        }
+        s.copy_from(&self.wallpaper);
 
         let focus = self.focus;
         let backdrop = &self.backdrop as *const Surface;
@@ -488,7 +566,11 @@ impl Shell {
             .collect();
         dock::draw(s, fonts, &self.backdrop, (self.width, self.height), &running);
         clockpill::draw(s, fonts, &self.backdrop, (self.width, self.height));
-        self.palette.draw(s, fonts, self.width, now);
+        if self.quick_open {
+            quick::draw(s, fonts, &self.backdrop, (self.width, self.height));
+        }
+        self.palette
+            .draw(s, fonts, &self.backdrop, (self.width, self.height), now);
         cursor::draw(s, self.pointer.0, self.pointer.1);
     }
 }
