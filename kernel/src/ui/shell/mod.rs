@@ -2,9 +2,9 @@
 
 pub mod app;
 pub mod calc;
+pub mod clockpill;
 pub mod dock;
 pub mod palette;
-pub mod statusbar;
 pub mod tokens;
 pub mod wallpaper;
 
@@ -26,6 +26,15 @@ pub struct Window {
     pub app: Box<dyn App>,
     /// Pre-snap geometry; Some(..) while snapped or maximized.
     pub restore: Option<Rect>,
+    /// Minimized to the dock.
+    pub hidden: bool,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Control {
+    Minimize,
+    Maximize,
+    Close,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -42,8 +51,25 @@ enum DragKind {
 }
 
 impl Window {
-    fn close_center(&self) -> (i32, i32) {
-        (self.rect.x + self.rect.w - 24, self.rect.y + TITLE_H / 2)
+    /// Control glyph centers, right-aligned in the title row: - [] x.
+    fn control_center(&self, c: Control) -> (i32, i32) {
+        let cy = self.rect.y + TITLE_H / 2;
+        let cx = match c {
+            Control::Close => self.rect.x + self.rect.w - 26,
+            Control::Maximize => self.rect.x + self.rect.w - 56,
+            Control::Minimize => self.rect.x + self.rect.w - 86,
+        };
+        (cx, cy)
+    }
+
+    fn control_hit(&self, px: i32, py: i32) -> Option<Control> {
+        for c in [Control::Minimize, Control::Maximize, Control::Close] {
+            let (cx, cy) = self.control_center(c);
+            if (px - cx).abs() <= 13 && (py - cy).abs() <= 15 {
+                return Some(c);
+            }
+        }
+        None
     }
 
     fn body(&self) -> Rect {
@@ -69,6 +95,7 @@ pub struct Shell {
     left_down: bool,
     drag: Option<(i32, i32, DragKind)>,
     palette: Palette,
+    quick_open: bool,
 }
 
 impl Shell {
@@ -89,6 +116,7 @@ impl Shell {
             left_down: false,
             drag: None,
             palette: Palette::new(),
+            quick_open: false,
         };
         shell.open(Box::new(crate::apps::terminal::TerminalApp::new()));
         shell
@@ -101,13 +129,14 @@ impl Shell {
         let y = (self.height - ph) / 2 + n * 24 - 24;
         self.windows.push(Window {
             rect: Rect {
-                x: x.clamp(8, self.width - pw - 8),
-                y: y.clamp(STATUS_H + 8, self.height - ph - 8),
+                x: x.clamp(8, (self.width - pw - 8).max(8)),
+                y: y.clamp(16, (self.height - ph - 8).max(16)),
                 w: pw,
                 h: ph,
             },
             app,
             restore: None,
+            hidden: false,
         });
         self.focus = self.windows.len() - 1;
     }
@@ -157,7 +186,7 @@ impl Shell {
                         win.rect.h = r.h;
                     }
                     win.rect.x = (pointer.0 - dx).clamp(-win.rect.w + 80, width - 80);
-                    win.rect.y = (pointer.1 - dy).clamp(STATUS_H, height - TITLE_H);
+                    win.rect.y = (pointer.1 - dy).clamp(4, height - TITLE_H);
                 }
                 DragKind::Resize => {
                     let (mw, mh) = win.app.min_size();
@@ -172,25 +201,33 @@ impl Shell {
         let (px, py) = self.pointer;
 
         for i in (0..self.windows.len()).rev() {
-            let win = &self.windows[i];
-            if !win.rect.contains(px, py) {
+            if self.windows[i].hidden || !self.windows[i].rect.contains(px, py) {
                 continue;
             }
-            let (cx, cy) = win.close_center();
-            if (px - cx) * (px - cx) + (py - cy) * (py - cy) <= 144 {
-                self.windows.remove(i);
-                if self.focus >= self.windows.len() {
-                    self.focus = self.windows.len().saturating_sub(1);
+            if let Some(control) = self.windows[i].control_hit(px, py) {
+                match control {
+                    Control::Close => {
+                        self.windows.remove(i);
+                        self.focus_topmost_visible();
+                    }
+                    Control::Minimize => {
+                        self.windows[i].hidden = true;
+                        self.focus_topmost_visible();
+                    }
+                    Control::Maximize => {
+                        self.bring_to_front(i);
+                        if self.windows[self.focus].restore.is_some() {
+                            self.restore_focused();
+                        } else {
+                            self.snap_focused(SnapZone::Max);
+                        }
+                    }
                 }
                 return;
             }
-            // Bring to front (stack order = vec order).
-            let win = self.windows.remove(i);
-            self.windows.push(win);
-            self.focus = self.windows.len() - 1;
+            self.bring_to_front(i);
             let r = self.windows[self.focus].rect;
             if px >= r.x + r.w - 18 && py >= r.y + r.h - 18 {
-                // Resize grip: remember pointer offset from the corner.
                 self.drag = Some((r.x + r.w - px, r.y + r.h - py, DragKind::Resize));
             } else if py < r.y + TITLE_H {
                 self.drag = Some((px - r.x, py - r.y, DragKind::Move));
@@ -198,14 +235,43 @@ impl Shell {
             return;
         }
 
-        if let Some(name) = dock::hit_test((px, py), (self.width, self.height)) {
-            self.open_named(name);
+        match dock::hit_test((px, py), (self.width, self.height)) {
+            Some(dock::DockHit::Orb) => {
+                if self.palette.open {
+                    self.palette.dismiss()
+                } else {
+                    self.palette.summon()
+                }
+                return;
+            }
+            Some(dock::DockHit::App(name)) => {
+                self.open_named(name);
+                return;
+            }
+            None => {}
+        }
+        if clockpill::hit_test((px, py), (self.width, self.height)) {
+            self.quick_open = !self.quick_open;
         }
     }
 
+    fn bring_to_front(&mut self, i: usize) {
+        let win = self.windows.remove(i);
+        self.windows.push(win);
+        self.focus = self.windows.len() - 1;
+    }
+
+    fn focus_topmost_visible(&mut self) {
+        self.focus = self
+            .windows
+            .iter()
+            .rposition(|w| !w.hidden)
+            .unwrap_or(0);
+    }
+
     fn zone_rect(&self, zone: SnapZone) -> Rect {
-        let top = STATUS_H + 8;
-        let bottom = self.height - 90; // keep clear of the dock band
+        let top = 16;
+        let bottom = self.height - 100; // keep clear of the dock band
         match zone {
             SnapZone::Left => Rect { x: 8, y: top, w: self.width / 2 - 12, h: bottom - top },
             SnapZone::Right => Rect {
@@ -224,7 +290,7 @@ impl Shell {
             Some(SnapZone::Left)
         } else if px >= self.width - 16 {
             Some(SnapZone::Right)
-        } else if py < STATUS_H + 8 {
+        } else if py < 12 {
             Some(SnapZone::Max)
         } else {
             None
@@ -248,7 +314,7 @@ impl Shell {
                 // The snapshot may have been taken mid-drag at a screen
                 // edge; always restore fully on-screen.
                 r.x = r.x.clamp(8, (width - r.w - 8).max(8));
-                r.y = r.y.clamp(STATUS_H + 8, (height - r.h - 8).max(STATUS_H + 8));
+                r.y = r.y.clamp(16, (height - r.h - 8).max(16));
                 win.rect = r;
             }
         }
@@ -263,11 +329,10 @@ impl Shell {
                 || (name == "clock" && t == "Timer")
         });
         if let Some(i) = existing {
-            let already_focused = i == self.focus;
+            let already_focused = i == self.focus && !self.windows[i].hidden;
             if !(name == "notes" && already_focused) {
-                let win = self.windows.remove(i);
-                self.windows.push(win);
-                self.focus = self.windows.len() - 1;
+                self.windows[i].hidden = false;
+                self.bring_to_front(i);
                 return;
             }
         }
@@ -386,8 +451,13 @@ impl Shell {
         let now = timer::uptime_ms();
 
         let focus = self.focus;
+        let backdrop = &self.backdrop as *const Surface;
         for i in 0..self.windows.len() {
-            draw_window(s, fonts, &mut self.windows[i], i == focus, now);
+            if self.windows[i].hidden {
+                continue;
+            }
+            // SAFETY: backdrop is only read while windows are drawn.
+            draw_window(s, fonts, unsafe { &*backdrop }, &mut self.windows[i], i == focus, now);
         }
 
         // Snap preview while dragging near an edge.
@@ -403,10 +473,10 @@ impl Shell {
             }
         }
 
-        statusbar::draw(s, fonts, &self.backdrop, self.width);
+
         let running: Vec<(&str, bool)> = dock::APPS
             .iter()
-            .map(|&(name, _)| {
+            .map(|&(name, _, _)| {
                 (
                     name,
                     self.windows.iter().any(|w| {
@@ -417,58 +487,77 @@ impl Shell {
             })
             .collect();
         dock::draw(s, fonts, &self.backdrop, (self.width, self.height), &running);
+        clockpill::draw(s, fonts, &self.backdrop, (self.width, self.height));
         self.palette.draw(s, fonts, self.width, now);
         cursor::draw(s, self.pointer.0, self.pointer.1);
     }
 }
 
-/// Modern window chrome: soft shadow, unified surface, inline title row,
-/// ghost close button on the right, accent border when focused.
-fn draw_window(s: &mut Surface, fonts: &mut Fonts, win: &mut Window, focused: bool, now: u64) {
+/// Meridian window chrome: glass surface (frosted backdrop + tint),
+/// hairline border (stroke2 when focused), inline title row with app-hued
+/// glyph, and mono text controls - [] x on the right.
+fn draw_window(
+    s: &mut Surface,
+    fonts: &mut Fonts,
+    backdrop: &Surface,
+    win: &mut Window,
+    focused: bool,
+    now: u64,
+) {
     let r = win.rect;
 
-    // Soft diffuse shadow.
-    for i in 0..5 {
-        let spread = 3 * (i + 1);
+    // One huge soft shadow.
+    for i in 0..6 {
+        let spread = 4 * (i + 1);
         s.fill_rounded_rect(
             r.x - spread / 2,
-            r.y - spread / 2 + 4,
+            r.y - spread / 2 + 8,
             r.w + spread,
             r.h + spread,
             RADIUS + spread / 2,
-            argb(8, 0, 0, 0),
+            argb(9, 0, 0, 0),
         );
     }
 
-    s.fill_rounded_rect(r.x, r.y, r.w, r.h, RADIUS, SURFACE);
+    // Glass body.
+    s.frosted_panel(backdrop, r.x, r.y, r.w, r.h, RADIUS, WIN_TINT);
 
-    // Border: accent when focused (2px), hairline otherwise.
-    let border = if focused { with_alpha(ACCENT, 230) } else { BORDER };
-    let t = if focused { 2 } else { 1 };
-    s.fill_rect(r.x + RADIUS, r.y, r.w - 2 * RADIUS, t, border);
-    s.fill_rect(r.x + RADIUS, r.y + r.h - t, r.w - 2 * RADIUS, t, border);
-    s.fill_rect(r.x, r.y + RADIUS, t, r.h - 2 * RADIUS, border);
-    s.fill_rect(r.x + r.w - t, r.y + RADIUS, t, r.h - 2 * RADIUS, border);
+    let border = if focused { STROKE2 } else { STROKE };
+    s.fill_rect(r.x + RADIUS, r.y, r.w - 2 * RADIUS, 1, border);
+    s.fill_rect(r.x + RADIUS, r.y + r.h - 1, r.w - 2 * RADIUS, 1, border);
+    s.fill_rect(r.x, r.y + RADIUS, 1, r.h - 2 * RADIUS, border);
+    s.fill_rect(r.x + r.w - 1, r.y + RADIUS, 1, r.h - 2 * RADIUS, border);
+    // Title row hairline.
+    s.fill_rect(r.x + 1, r.y + TITLE_H, r.w - 2, 1, STROKE);
 
-    // Inline title row: glyph + title left, ghost close right.
+    // Glyph in the app's hue, then the title.
+    let hue = dock::APPS
+        .iter()
+        .find(|(n, _, _)| win.app.title().eq_ignore_ascii_case(n) || (*n == "clock" && win.app.title() == "Timer"))
+        .map(|&(_, _, h)| h)
+        .unwrap_or(ACC);
     fonts
         .mono
-        .draw(s, win.app.glyph(), 13.0, r.x + 16, r.y + 10, TEXT_DIM);
-    let gx = r.x + 16 + fonts.mono.measure(win.app.glyph(), 13.0).0 + 10;
+        .draw(s, win.app.glyph(), 12.0, r.x + 16, r.y + 14, hue);
+    let gx = r.x + 16 + fonts.mono.measure(win.app.glyph(), 12.0).0 + 10;
     let title = alloc::string::String::from(win.app.title());
-    fonts.ui_medium.draw(s, &title, 15.0, gx, r.y + 8, TEXT);
+    fonts.ui_semibold.draw(s, &title, 13.0, gx, r.y + 13, TX);
 
-    let (cx, cy) = win.close_center();
-    s.fill_rounded_rect(cx - 11, cy - 11, 22, 22, 11, SURFACE_HI);
-    let (xw, _) = fonts.mono.measure("x", 13.0);
-    fonts
-        .mono
-        .draw(s, "x", 13.0, cx - xw / 2, cy - 9, TEXT_DIM);
+    // Controls: - [] x (mono, dim).
+    for (c, glyph) in [
+        (Control::Minimize, "-"),
+        (Control::Maximize, "[]"),
+        (Control::Close, "x"),
+    ] {
+        let (cx, cy) = win.control_center(c);
+        let (gw, _) = fonts.mono.measure(glyph, 13.0);
+        fonts.mono.draw(s, glyph, 13.0, cx - gw / 2, cy - 9, TX3);
+    }
 
-    // Resize grip affordance: two short diagonal ticks.
+    // Resize grip affordance.
     for i in 0..2 {
         let off = 6 + i * 4;
-        s.fill_rect(r.x + r.w - off - 4, r.y + r.h - 7, off, 2, with_alpha(TEXT_DIM, 130));
+        s.fill_rect(r.x + r.w - off - 4, r.y + r.h - 7, off, 2, with_alpha(TX3, 150));
     }
 
     let body = win.body();

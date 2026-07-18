@@ -6,10 +6,10 @@ use fontdue::{Font as FontdueFont, FontSettings, Metrics};
 
 use super::surface::{over, Surface};
 
-pub static INTER_REGULAR: &[u8] = include_bytes!("../../../assets/inter-regular.ttf");
-pub static INTER_MEDIUM: &[u8] = include_bytes!("../../../assets/inter-medium.ttf");
-pub static INTER_SEMIBOLD: &[u8] = include_bytes!("../../../assets/inter-semibold.ttf");
-pub static JB_MONO: &[u8] = include_bytes!("../../../assets/jbmono.ttf");
+pub static GEIST_REGULAR: &[u8] = include_bytes!("../../../assets/geist-regular.ttf");
+pub static GEIST_MEDIUM: &[u8] = include_bytes!("../../../assets/geist-medium.ttf");
+pub static GEIST_SEMIBOLD: &[u8] = include_bytes!("../../../assets/geist-semibold.ttf");
+pub static GEIST_MONO: &[u8] = include_bytes!("../../../assets/geistmono.ttf");
 
 /// A parsed font plus a rasterized-glyph cache keyed by (glyph index, px).
 pub struct Font {
@@ -110,10 +110,10 @@ pub struct Fonts {
 impl Fonts {
     pub fn load() -> Self {
         Self {
-            ui: Font::load(INTER_REGULAR),
-            ui_medium: Font::load(INTER_MEDIUM),
-            ui_semibold: Font::load(INTER_SEMIBOLD),
-            mono: Font::load(JB_MONO),
+            ui: Font::load(GEIST_REGULAR),
+            ui_medium: Font::load(GEIST_MEDIUM),
+            ui_semibold: Font::load(GEIST_SEMIBOLD),
+            mono: Font::load(GEIST_MONO),
         }
     }
 }

@@ -148,10 +148,10 @@ impl Palette {
             );
         }
         s.fill_rounded_rect(x, y, BAR_W, panel_h, RADIUS, SURFACE_HI);
-        s.fill_rect(x + RADIUS, y, BAR_W - 2 * RADIUS, 1, BORDER);
-        s.fill_rect(x + RADIUS, y + panel_h - 1, BAR_W - 2 * RADIUS, 1, BORDER);
-        s.fill_rect(x, y + RADIUS, 1, panel_h - 2 * RADIUS, BORDER);
-        s.fill_rect(x + BAR_W - 1, y + RADIUS, 1, panel_h - 2 * RADIUS, BORDER);
+        s.fill_rect(x + RADIUS, y, BAR_W - 2 * RADIUS, 1, STROKE);
+        s.fill_rect(x + RADIUS, y + panel_h - 1, BAR_W - 2 * RADIUS, 1, STROKE);
+        s.fill_rect(x, y + RADIUS, 1, panel_h - 2 * RADIUS, STROKE);
+        s.fill_rect(x + BAR_W - 1, y + RADIUS, 1, panel_h - 2 * RADIUS, STROKE);
 
         fonts.mono.draw(s, ">", 17.0, x + 18, y + 16, TEXT_DIM);
         fonts.mono.draw(s, &self.input, 17.0, x + 38, y + 16, TEXT);
@@ -162,7 +162,7 @@ impl Palette {
         }
 
         if let Some(hint) = &self.hint {
-            s.fill_rect(x + 16, y + BAR_H, BAR_W - 32, 1, BORDER);
+            s.fill_rect(x + 16, y + BAR_H, BAR_W - 32, 1, STROKE);
             fonts
                 .ui_medium
                 .draw(s, hint, 13.0, x + 18, y + BAR_H + 7, TEXT_DIM);

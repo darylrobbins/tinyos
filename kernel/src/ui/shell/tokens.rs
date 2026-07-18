@@ -1,18 +1,48 @@
-//! Shell v2 design tokens — soft-dark neutral.
+//! Meridian design tokens, extracted from docs/reference/meridian-os.html.
 
 use crate::gfx::surface::{argb, rgb};
 
-pub const FIELD: u32 = rgb(0x0F, 0x12, 0x22);
-pub const BLOB_A: u32 = rgb(0x7C, 0x5C, 0xFF); // violet
-pub const BLOB_B: u32 = rgb(0x2B, 0xB8, 0xD9); // cyan
-pub const SURFACE: u32 = rgb(0x1C, 0x1E, 0x26);
-pub const SURFACE_HI: u32 = rgb(0x25, 0x28, 0x34);
-pub const BORDER: u32 = argb(20, 255, 255, 255);
-pub const ACCENT: u32 = rgb(0x7C, 0x5C, 0xFF);
-pub const TEXT: u32 = rgb(0xE6, 0xE8, 0xF0);
-pub const TEXT_DIM: u32 = rgb(0x8A, 0x8F, 0xA3);
+pub const BG: u32 = rgb(0x07, 0x09, 0x0d);
+/// Radial wash hues (blended into the wallpaper at low strength).
+pub const WALL1: u32 = rgb(0x5f, 0xd4, 0xc4); // teal, 12%
+pub const WALL2: u32 = rgb(0x7a, 0x6e, 0xe4); // violet, 10%
 
-pub const RADIUS: i32 = 14;
-pub const TILE_RADIUS: i32 = 10;
-pub const STATUS_H: i32 = 30;
-pub const TITLE_H: i32 = 34;
+/// Window glass tint: rgba(17,20,26,.82) over the blurred backdrop.
+pub const WIN_TINT: u32 = argb(209, 0x11, 0x14, 0x1a);
+/// Pill/launcher glass tint: rgba(14,17,23,.72).
+pub const GLASS_TINT: u32 = argb(184, 0x0e, 0x11, 0x17);
+
+pub const CARD: u32 = argb(11, 255, 255, 255); // white .045
+pub const CARD2: u32 = argb(20, 255, 255, 255); // white .08
+pub const STROKE: u32 = argb(23, 255, 255, 255); // white .09
+pub const STROKE2: u32 = argb(41, 255, 255, 255); // white .16
+
+pub const TX: u32 = rgb(0xe8, 0xec, 0xf2);
+pub const TX2: u32 = rgb(0x9a, 0xa4, 0xb5);
+pub const TX3: u32 = rgb(0x5f, 0x68, 0x79);
+
+pub const ACC: u32 = rgb(0x5f, 0xd4, 0xc4);
+pub const ACC_TX: u32 = rgb(0x05, 0x2a, 0x24);
+
+// Secondary hues: app icons and syntax only.
+pub const HUE_AMBER: u32 = rgb(0xe2, 0xb8, 0x6b);
+pub const HUE_BLUE: u32 = rgb(0x7f, 0xb2, 0xff);
+pub const HUE_VIOLET: u32 = rgb(0xb7, 0x9b, 0xff);
+#[allow(dead_code)]
+pub const HUE_RED: u32 = rgb(0xff, 0x9e, 0x9e);
+/// Dark ink on the orb gradient.
+pub const ORB_TX: u32 = rgb(0x08, 0x11, 0x0f);
+
+pub const RADIUS_WIN: i32 = 14;
+pub const RADIUS_PILL: i32 = 18;
+pub const RADIUS_TILE: i32 = 13;
+pub const TITLE_H: i32 = 44;
+
+// Compatibility aliases used across the shell.
+pub const SURFACE_HI: u32 = CARD2;
+pub const TEXT: u32 = TX;
+pub const TEXT_DIM: u32 = TX2;
+pub const ACCENT: u32 = ACC;
+pub const FIELD: u32 = BG;
+pub const RADIUS: i32 = RADIUS_WIN;
+pub const STATUS_H: i32 = 0; // no top bar in Meridian
