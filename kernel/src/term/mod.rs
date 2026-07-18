@@ -9,8 +9,10 @@ use crate::arch::timer;
 use crate::drivers::input::keys;
 use crate::gfx::font::Fonts;
 use crate::gfx::surface::{argb, rgb, Surface};
-use crate::ui::desktop::{ShellEvent, Window, CELL_H, CELL_W, TERM_COLS, TERM_ROWS};
 use crate::{mem, VERSION};
+
+pub const CELL_W: i32 = 9;
+pub const CELL_H: i32 = 19;
 
 const FG: u32 = rgb(228, 228, 236);
 const ACCENT: u32 = rgb(120, 230, 190);
@@ -21,6 +23,8 @@ const PROMPT: &str = "daryl@tinyos ~ % ";
 const SCROLLBACK: usize = 400;
 
 pub struct Terminal {
+    /// Wrap width in cells; the hosting card updates this from its rect.
+    pub cols: usize,
     lines: VecDeque<(String, u32)>,
     input: String,
     cursor: usize,
@@ -31,6 +35,7 @@ pub struct Terminal {
 impl Terminal {
     pub fn new() -> Self {
         let mut t = Self {
+            cols: 80,
             lines: VecDeque::new(),
             input: String::new(),
             cursor: 0,
@@ -47,7 +52,7 @@ impl Terminal {
         if chars.is_empty() {
             self.push_line(String::new(), color);
         }
-        for chunk in chars.chunks(TERM_COLS.max(1)) {
+        for chunk in chars.chunks(self.cols.max(1)) {
             self.push_line(chunk.iter().collect(), color);
         }
     }
@@ -59,27 +64,29 @@ impl Terminal {
         self.lines.push_back((s, color));
     }
 
-    pub fn handle(&mut self, ev: &ShellEvent) {
-        match *ev {
-            ShellEvent::Char('\n') => self.execute(),
-            ShellEvent::Char(c) => {
-                self.input.insert(self.byte_cursor(), c);
-                self.cursor += 1;
-                self.hist_idx = None;
-            }
-            ShellEvent::Key(keys::BACKSPACE) => {
+    pub fn on_char(&mut self, c: char) {
+        if c == '\n' {
+            self.execute();
+        } else {
+            self.input.insert(self.byte_cursor(), c);
+            self.cursor += 1;
+            self.hist_idx = None;
+        }
+    }
+
+    pub fn on_key(&mut self, code: u16) {
+        match code {
+            keys::BACKSPACE => {
                 if self.cursor > 0 {
                     self.cursor -= 1;
                     self.input.remove(self.byte_cursor());
                 }
             }
-            ShellEvent::Key(keys::LEFT) => self.cursor = self.cursor.saturating_sub(1),
-            ShellEvent::Key(keys::RIGHT) => {
-                self.cursor = (self.cursor + 1).min(self.input.chars().count())
-            }
-            ShellEvent::Key(keys::UP) => self.history_nav(true),
-            ShellEvent::Key(keys::DOWN) => self.history_nav(false),
-            ShellEvent::Key(_) => {}
+            keys::LEFT => self.cursor = self.cursor.saturating_sub(1),
+            keys::RIGHT => self.cursor = (self.cursor + 1).min(self.input.chars().count()),
+            keys::UP => self.history_nav(true),
+            keys::DOWN => self.history_nav(false),
+            _ => {}
         }
     }
 
@@ -175,11 +182,17 @@ impl Terminal {
         }
     }
 
-    pub fn draw(&self, surface: &mut Surface, fonts: &mut Fonts, win: &Window) {
-        let (ox, oy) = win.content_origin();
-
+    pub fn draw(
+        &self,
+        surface: &mut Surface,
+        fonts: &mut Fonts,
+        ox: i32,
+        oy: i32,
+        rows: usize,
+        now_ms: u64,
+    ) {
         // Visible slice: last rows-1 scrollback lines, prompt on the next row.
-        let visible = TERM_ROWS - 1;
+        let visible = rows.saturating_sub(1).max(1);
         let start = self.lines.len().saturating_sub(visible);
         let mut row = 0;
         for (text, color) in self.lines.iter().skip(start) {
@@ -195,7 +208,7 @@ impl Terminal {
         let px = ox + PROMPT.len() as i32 * CELL_W;
         fonts.mono.draw(surface, &self.input, 15.0, px, y, FG);
 
-        if timer::uptime_ms() / 530 % 2 == 0 {
+        if now_ms / 530 % 2 == 0 {
             let cx = px + self.cursor as i32 * CELL_W;
             surface.fill_rect(cx, y + 1, CELL_W, CELL_H - 2, argb(210, 228, 228, 236));
         }

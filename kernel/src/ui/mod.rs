@@ -1,5 +1,6 @@
 pub mod cursor;
 pub mod desktop;
+pub mod shell;
 pub mod splash;
 pub mod wallpaper;
 

@@ -6,6 +6,7 @@ extern crate alloc;
 
 #[macro_use]
 mod logger;
+mod apps;
 mod arch;
 mod drivers;
 mod gfx;
@@ -128,24 +129,16 @@ fn kmain(mut fb: FbInfo, memory_map: MemoryMapOwned) -> ! {
 
     FB_SIZE.call_once(|| (fb.width, fb.height));
     let mut input = drivers::input::Input::init();
-    let mut desktop = ui::desktop::Desktop::new(fb.width, fb.height);
-    let mut terminal = term::Terminal::new();
-    kprintln!("tinyos: desktop up");
+    let mut shell = ui::shell::Shell::new(fb.width, fb.height);
+    kprintln!("tinyos: shell up");
 
     let mut events = alloc::vec::Vec::new();
-    let mut shell_events = alloc::vec::Vec::new();
     loop {
         events.clear();
-        shell_events.clear();
         input.poll(&mut events);
-        desktop.handle(&events, &mut shell_events);
-        for ev in &shell_events {
-            terminal.handle(ev);
-        }
+        shell.handle(&events);
 
-        desktop.compose(&mut surface, &mut fonts, |surface, fonts, win| {
-            terminal.draw(surface, fonts, win);
-        });
+        shell.compose(&mut surface, &mut fonts);
         surface.present(&fb);
 
         let next = arch::timer::uptime_us() / 16_667 * 16_667 + 16_667;

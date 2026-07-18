@@ -117,6 +117,7 @@ pub mod keys {
     pub const ENTER: u16 = 28;
     pub const LSHIFT: u16 = 42;
     pub const RSHIFT: u16 = 54;
+    pub const LCTRL: u16 = 29;
     pub const UP: u16 = 103;
     pub const DOWN: u16 = 108;
     pub const LEFT: u16 = 105;
