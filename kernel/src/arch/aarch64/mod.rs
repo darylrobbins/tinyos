@@ -1,4 +1,5 @@
 pub mod exceptions;
+pub mod timer;
 
 use core::arch::asm;
 use core::fmt;

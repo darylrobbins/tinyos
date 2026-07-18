@@ -1,3 +1,6 @@
+pub mod font;
+pub mod surface;
+
 /// How the GOP framebuffer lays out a pixel in memory (byte order).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FbFormat {
@@ -27,17 +30,3 @@ impl FbInfo {
     }
 }
 
-/// M1 proof of life: vertical gradient, midnight blue to teal.
-pub fn test_pattern(fb: &FbInfo) {
-    let ptr = fb.base as *mut u32;
-    for y in 0..fb.height {
-        let t = (y * 255 / fb.height) as u32;
-        let r = (10 + t * 20 / 255) as u8;
-        let g = (15 + t * 120 / 255) as u8;
-        let b = (40 + t * 110 / 255) as u8;
-        let px = fb.pack(r, g, b);
-        for x in 0..fb.width {
-            unsafe { ptr.add(y * fb.stride + x).write_volatile(px) };
-        }
-    }
-}

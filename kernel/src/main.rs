@@ -8,6 +8,7 @@ mod logger;
 mod arch;
 mod gfx;
 mod mem;
+mod ui;
 
 use uefi::boot::{self, MemoryType};
 use uefi::mem::memory_map::MemoryMapOwned;
@@ -83,11 +84,12 @@ fn kmain(fb: FbInfo, memory_map: MemoryMapOwned) -> ! {
     let heap_bytes = mem::init_heap(&memory_map);
     kprintln!("tinyos: heap {} MiB", heap_bytes / (1024 * 1024));
 
-    let v: alloc::vec::Vec<u32> = (0..64).collect();
-    kprintln!("tinyos: alloc ok ({} elems)", v.len());
+    let mut fonts = gfx::font::Fonts::load();
+    let mut surface = gfx::surface::Surface::new(fb.width, fb.height);
+    kprintln!("tinyos: fonts loaded, surface ready");
 
-    gfx::test_pattern(&fb);
-    kprintln!("tinyos: test pattern drawn - M1 complete");
+    ui::splash::run(&fb, &mut surface, &mut fonts);
+    kprintln!("tinyos: splash done - M2 complete (uptime {} ms)", arch::timer::uptime_ms());
 
     arch::park()
 }
