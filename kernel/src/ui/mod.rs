@@ -1,3 +1,4 @@
+pub mod cursor;
 pub mod splash;
 
 /// Ease-in-out cubic, t in 0.0..=1.0.
