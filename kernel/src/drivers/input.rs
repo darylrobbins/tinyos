@@ -94,16 +94,18 @@ impl Input {
 }
 
 /// US-layout keycode to character translation.
+/// `\x01` marks non-printing slots (esc, backspace, enter) so that real
+/// printable characters — including '*' — are never filtered out.
 pub fn keycode_to_char(code: u16, shift: bool) -> Option<char> {
-    const PLAIN: &str = "**1234567890-=*\tqwertyuiop[]*\x00asdfghjkl;'`\x00\\zxcvbnm,./";
-    const SHIFTED: &str = "**!@#$%^&*()_+*\tQWERTYUIOP{}*\x00ASDFGHJKL:\"~\x00|ZXCVBNM<>?";
+    const PLAIN: &str = "\x01\x011234567890-=\x01\tqwertyuiop[]\x01\x00asdfghjkl;'`\x00\\zxcvbnm,./";
+    const SHIFTED: &str = "\x01\x01!@#$%^&*()_+\x01\tQWERTYUIOP{}\x01\x00ASDFGHJKL:\"~\x00|ZXCVBNM<>?";
     let table = if shift { SHIFTED } else { PLAIN };
     match code {
         57 => Some(' '),
         28 => Some('\n'),
         _ => {
             let c = table.chars().nth(code as usize)?;
-            (c != '*' && c != '\x00').then_some(c)
+            (c != '\x01' && c != '\x00').then_some(c)
         }
     }
 }
