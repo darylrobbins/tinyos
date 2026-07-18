@@ -88,11 +88,35 @@ fn setup_graphics() -> uefi::Result<FbInfo> {
 
 /// Post-boot-services entry point. UEFI's identity-mapped page tables and
 /// stack remain in use; the memory map tells us what RAM is ours to manage.
-fn kmain(fb: FbInfo, memory_map: MemoryMapOwned) -> ! {
+fn kmain(mut fb: FbInfo, memory_map: MemoryMapOwned) -> ! {
     arch::exceptions::install();
 
     let heap_bytes = mem::init_heap(&memory_map);
     kprintln!("tinyos: heap {} MiB", heap_bytes / (1024 * 1024));
+
+    // Upgrade the display: re-point ramfb at our own, larger framebuffer.
+    // (edk2's GOP tops out at 1024x768; ramfb itself has no such limit.)
+    let (rw, rh) = drivers::fwcfg::read_str("opt/tinyos/res")
+        .and_then(|s| {
+            let (w, h) = s.trim().split_once('x')?;
+            Some((w.parse().ok()?, h.parse().ok()?))
+        })
+        .unwrap_or((1440usize, 900usize));
+    if (rw, rh) != (fb.width, fb.height) {
+        match drivers::fwcfg::ramfb_resize(rw, rh) {
+            Some(base) => {
+                fb = FbInfo {
+                    base,
+                    width: rw,
+                    height: rh,
+                    stride: rw,
+                    format: FbFormat::Bgrx,
+                };
+                kprintln!("tinyos: ramfb resized to {rw}x{rh}");
+            }
+            None => kprintln!("tinyos: ramfb resize unavailable, keeping GOP mode"),
+        }
+    }
 
     let mut fonts = gfx::font::Fonts::load();
     let mut surface = gfx::surface::Surface::new(fb.width, fb.height);

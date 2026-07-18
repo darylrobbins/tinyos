@@ -35,6 +35,11 @@ make run
 Hypervisor.framework. Serial output lands on stdout. If HVF gives you
 trouble: `make run ACCEL="-accel tcg -cpu cortex-a72"`.
 
+The desktop runs at 1440×900 by default (the kernel re-points QEMU's ramfb
+at its own framebuffer via fw_cfg, past edk2's 1024×768 GOP ceiling). Pick
+any size with `make run RES=1920x1200`, and use the window's View → Zoom to
+Fit (on by default) to scale.
+
 ## Layout
 
 ```

@@ -9,6 +9,11 @@ BUILD       := build
 ACCEL       := -accel hvf -cpu host
 # Fallback if HVF misbehaves: make run ACCEL="-accel tcg -cpu cortex-a72"
 
+# Guest resolution; override with e.g. make run RES=1920x1200
+RES         := 1440x900
+# Window scaling (View menu also has Zoom to Fit); headless runs override this.
+DISPLAY_ARG := -display cocoa,zoom-to-fit=on
+
 QEMU_ARGS   := -machine virt -m 512M $(ACCEL) \
     -drive if=pflash,format=raw,readonly=on,file=$(BUILD)/code.fd \
     -drive if=pflash,format=raw,file=$(BUILD)/vars.fd \
@@ -16,7 +21,10 @@ QEMU_ARGS   := -machine virt -m 512M $(ACCEL) \
     -device virtio-keyboard-pci \
     -device virtio-tablet-pci \
     -drive format=raw,file=fat:rw:$(ESP) \
+    -fw_cfg name=opt/tinyos/res,string=$(RES) \
     -serial stdio
+
+run: QEMU_ARGS += $(DISPLAY_ARG)
 
 .PHONY: build run gdb clean
 
