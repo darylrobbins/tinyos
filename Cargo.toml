@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = ["kernel"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[profile.dev]
+# Software rendering is unusable at opt-level 0
+opt-level = 2
