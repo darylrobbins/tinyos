@@ -14,12 +14,15 @@ use crate::{mem, VERSION};
 pub const CELL_W: i32 = 9;
 pub const CELL_H: i32 = 19;
 
-const FG: u32 = rgb(228, 228, 236);
-const ACCENT: u32 = rgb(120, 230, 190);
-const DIM: u32 = rgb(150, 150, 168);
-const ERR: u32 = rgb(255, 122, 110);
+const FG: u32 = rgb(0xe8, 0xec, 0xf2);
+const ACCENT: u32 = rgb(0x5f, 0xd4, 0xc4);
+const DIM: u32 = rgb(0x5f, 0x68, 0x79);
+const ERR: u32 = rgb(0xff, 0x9e, 0x9e);
 
-const PROMPT: &str = "daryl@tinyos ~ % ";
+const PROMPT_USER: &str = "daryl@tinyos";
+const PROMPT_PATH: &str = " ~ ";
+const PROMPT_CHEVRON: &str = "> ";
+const PROMPT: &str = "daryl@tinyos ~ > ";
 const SCROLLBACK: usize = 400;
 
 pub struct Terminal {
@@ -202,9 +205,13 @@ impl Terminal {
             row += 1;
         }
 
-        // Prompt line with block cursor.
+        // Prompt line with block cursor: user teal, path dim, chevron teal.
         let y = oy + row as i32 * CELL_H;
-        fonts.mono.draw(surface, PROMPT, 15.0, ox, y, ACCENT);
+        fonts.mono.draw(surface, PROMPT_USER, 15.0, ox, y, ACCENT);
+        let path_x = ox + PROMPT_USER.len() as i32 * CELL_W;
+        fonts.mono.draw(surface, PROMPT_PATH, 15.0, path_x, y, DIM);
+        let chev_x = path_x + PROMPT_PATH.len() as i32 * CELL_W;
+        fonts.mono.draw(surface, PROMPT_CHEVRON, 15.0, chev_x, y, ACCENT);
         let px = ox + PROMPT.len() as i32 * CELL_W;
         fonts.mono.draw(surface, &self.input, 15.0, px, y, FG);
 

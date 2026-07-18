@@ -57,6 +57,5 @@ kernel/src/
 
 Design doc: `docs/superpowers/specs/2026-07-17-tinyos-design.md`.
 
-Fonts: [Inter](https://rsms.me/inter/) and
-[JetBrains Mono](https://www.jetbrains.com/lp/mono/), both OFL (licenses in
+Fonts: [Geist and Geist Mono](https://vercel.com/font), OFL (license in
 `assets/`). Inspired by [Philipp Oppermann's blog_os](https://os.phil-opp.com).
