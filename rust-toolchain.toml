@@ -1,4 +1,4 @@
 [toolchain]
 channel = "nightly"
 components = ["rust-src", "rustfmt"]
-targets = ["aarch64-unknown-uefi"]
+targets = ["aarch64-unknown-uefi", "x86_64-unknown-uefi"]

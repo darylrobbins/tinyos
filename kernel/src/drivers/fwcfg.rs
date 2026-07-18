@@ -9,23 +9,59 @@ use alloc::alloc::{alloc_zeroed, Layout};
 use alloc::string::String;
 use alloc::vec;
 
-use super::mmio;
-
-/// fw_cfg MMIO on QEMU virt: data @+0, selector @+8, DMA control @+16.
-const BASE: usize = 0x0902_0000;
 const FILE_DIR: u16 = 0x19;
 
 const DMA_ERROR: u32 = 1;
 const DMA_SELECT: u32 = 8;
 const DMA_WRITE: u32 = 16;
 
-fn select(sel: u16) {
-    mmio::w16(BASE + 8, sel.swap_bytes());
+// Transport: MMIO on the virt board, port I/O on x86.
+
+#[cfg(target_arch = "aarch64")]
+mod transport {
+    use crate::drivers::mmio;
+
+    /// fw_cfg MMIO on QEMU virt: data @+0, selector @+8, DMA control @+16.
+    const BASE: usize = 0x0902_0000;
+
+    pub fn select(sel: u16) {
+        mmio::w16(BASE + 8, sel.swap_bytes());
+    }
+
+    pub fn read_byte() -> u8 {
+        mmio::r8(BASE)
+    }
+
+    pub fn dma_trigger(access_addr: u64) {
+        mmio::w64(BASE + 16, access_addr.swap_bytes());
+    }
 }
+
+#[cfg(target_arch = "x86_64")]
+mod transport {
+    use crate::arch::io;
+
+    /// fw_cfg ports: selector 0x510, data 0x511, DMA address 0x514 (big-
+    /// endian 64-bit; writing the low half triggers the transfer).
+    pub fn select(sel: u16) {
+        io::outw(0x510, sel);
+    }
+
+    pub fn read_byte() -> u8 {
+        io::inb(0x511)
+    }
+
+    pub fn dma_trigger(access_addr: u64) {
+        io::outl(0x514, ((access_addr >> 32) as u32).swap_bytes());
+        io::outl(0x518, (access_addr as u32).swap_bytes());
+    }
+}
+
+use transport::{dma_trigger, read_byte, select};
 
 fn read_bytes(buf: &mut [u8]) {
     for b in buf {
-        *b = mmio::r8(BASE);
+        *b = read_byte();
     }
 }
 
@@ -68,11 +104,18 @@ fn dma_write(sel: u16, data: &[u8]) -> bool {
 
     let access_addr = access.as_ptr() as u64;
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-    mmio::w64(BASE + 16, access_addr.swap_bytes());
+    dma_trigger(access_addr);
     core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
 
-    let ctl = u32::from_be_bytes(access[0..4].try_into().unwrap());
-    ctl & DMA_ERROR == 0
+    // On completion QEMU zeroes control (or sets ERROR). If it still holds
+    // our request bits, the device never saw the trigger.
+    let ctl = u32::from_be_bytes(
+        unsafe { core::ptr::read_volatile(access.as_ptr() as *const [u8; 4]) },
+    );
+    if ctl != 0 {
+        kprintln!("tinyos: fw_cfg dma failed, control={ctl:#x}");
+    }
+    ctl == 0
 }
 
 /// Point ramfb at a freshly allocated framebuffer of the given size.

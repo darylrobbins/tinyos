@@ -2,9 +2,9 @@ use core::fmt::{self, Write};
 
 use spin::Mutex;
 
-use crate::arch::Pl011;
+use crate::arch::Serial;
 
-static SERIAL: Mutex<Pl011> = Mutex::new(Pl011::new(0x0900_0000));
+static SERIAL: Mutex<Serial> = Mutex::new(Serial::new());
 
 pub fn _print(args: fmt::Arguments) {
     SERIAL.lock().write_fmt(args).ok();

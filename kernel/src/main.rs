@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![cfg_attr(target_arch = "x86_64", feature(abi_x86_interrupt))]
 
 extern crate alloc;
 
@@ -29,7 +30,7 @@ use gfx::{FbFormat, FbInfo};
 
 #[entry]
 fn main() -> Status {
-    kprintln!("tinyos: booting at EL{}", arch::current_el());
+    kprintln!("tinyos: booting at {}", arch::boot_privilege());
 
     let fb = setup_graphics().expect("graphics init failed");
     kprintln!(

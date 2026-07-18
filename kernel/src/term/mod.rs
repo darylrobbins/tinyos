@@ -143,8 +143,8 @@ impl Terminal {
                 let (used, free) = mem::stats();
                 let lines = [
                     format!("tinyOS {VERSION}"),
-                    format!("arch:      aarch64 (EL{})", crate::arch::current_el()),
-                    "machine:   QEMU virt, UEFI boot".to_string(),
+                    format!("arch:      {} ({})", crate::arch::NAME, crate::arch::boot_privilege()),
+                    format!("machine:   {}", crate::arch::MACHINE),
                     format!("display:   {}x{} @ 32bpp", crate::fb_size().0, crate::fb_size().1),
                     format!("heap:      {} MiB used / {} MiB free", used >> 20, free >> 20),
                     format!("uptime:    {}", fmt_uptime()),

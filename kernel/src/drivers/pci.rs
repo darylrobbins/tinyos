@@ -4,8 +4,11 @@ use super::mmio;
 
 pub const VENDOR_VIRTIO: u16 = 0x1af4;
 
-/// QEMU virt ECAM candidates: highmem (default) and legacy low.
+/// ECAM candidates: QEMU virt highmem + legacy low (aarch64), q35 MMCONFIG (x86).
+#[cfg(target_arch = "aarch64")]
 const ECAM_BASES: [usize; 2] = [0x40_1000_0000, 0x3f00_0000];
+#[cfg(target_arch = "x86_64")]
+const ECAM_BASES: [usize; 2] = [0xe000_0000, 0xb000_0000];
 
 #[derive(Clone, Copy)]
 pub struct PciDevice {
@@ -86,7 +89,10 @@ impl BarAllocator {
     /// Top region of the virt 32-bit PCI MMIO window (0x1000_0000..0x3EFF_0000);
     /// edk2 allocates from the bottom, so the top is free.
     pub fn new() -> Self {
-        Self { next: 0x3a00_0000 }
+        #[cfg(target_arch = "aarch64")]
+        return Self { next: 0x3a00_0000 };
+        #[cfg(target_arch = "x86_64")]
+        return Self { next: 0xc800_0000 };
     }
 
     fn alloc(&mut self, size: u64) -> u64 {
@@ -100,9 +106,14 @@ impl BarAllocator {
 
 /// Scan bus 0 and return all devices.
 pub fn scan() -> impl Iterator<Item = PciDevice> {
+    // Host bridge at 0:0.0 must have a real vendor ID; unmapped candidates
+    // read as all-ones or all-zeroes.
     let ecam = ECAM_BASES
         .into_iter()
-        .find(|&base| mmio::r32(base) != !0u32)
+        .find(|&base| {
+            let vendor = mmio::r32(base) & 0xFFFF;
+            vendor != 0xFFFF && vendor != 0
+        })
         .expect("no PCI ECAM found");
 
     (0u32..32).filter_map(move |dev| {
