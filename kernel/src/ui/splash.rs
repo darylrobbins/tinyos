@@ -5,7 +5,7 @@ use crate::gfx::FbInfo;
 
 use super::{clamp01, ease};
 
-const BG: u32 = rgb(8, 8, 12);
+use crate::ui::shell::tokens::{ACCENT, FIELD, TEXT};
 const FADE_IN_MS: f32 = 600.0;
 const PROGRESS_START_MS: f32 = 500.0;
 const PROGRESS_MS: f32 = 2200.0;
@@ -31,7 +31,7 @@ pub fn run(fb: &FbInfo, surface: &mut Surface, fonts: &mut Fonts) {
             break;
         }
 
-        surface.clear(BG);
+        surface.clear(FIELD);
 
         // Wordmark fades in.
         let fade_in = ease(clamp01(elapsed_ms / FADE_IN_MS));
@@ -42,7 +42,7 @@ pub fn run(fb: &FbInfo, surface: &mut Surface, fonts: &mut Fonts) {
             64.0,
             cx,
             cy - 80,
-            with_alpha(rgb(240, 240, 245), alpha),
+            with_alpha(TEXT, alpha),
         );
 
         // Progress bar: track plus eased fill.
@@ -63,7 +63,7 @@ pub fn run(fb: &FbInfo, surface: &mut Surface, fonts: &mut Fonts) {
                 fill_w,
                 bar_h,
                 bar_h / 2,
-                with_alpha(rgb(255, 255, 255), (0.9 * alpha as f32) as u8),
+                with_alpha(ACCENT, alpha),
             );
         }
 
@@ -75,7 +75,7 @@ pub fn run(fb: &FbInfo, surface: &mut Surface, fonts: &mut Fonts) {
                 0,
                 surface.width as i32,
                 surface.height as i32,
-                with_alpha(rgb(0, 0, 0), (ease(fade_out) * 255.0) as u8),
+                with_alpha(FIELD, (ease(fade_out) * 255.0) as u8),
             );
         }
 

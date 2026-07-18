@@ -1,7 +1,9 @@
 //! Shell v2: modern soft-dark-neutral windowed desktop.
 
 pub mod app;
+pub mod calc;
 pub mod dock;
+pub mod palette;
 pub mod statusbar;
 pub mod tokens;
 pub mod wallpaper;
@@ -15,6 +17,7 @@ use crate::gfx::font::Fonts;
 use crate::gfx::surface::{argb, with_alpha, Surface};
 
 use self::app::{App, Rect};
+use self::palette::{Action, Palette};
 use self::tokens::*;
 use super::cursor;
 
@@ -65,6 +68,7 @@ pub struct Shell {
     ctrl: bool,
     left_down: bool,
     drag: Option<(i32, i32, DragKind)>,
+    palette: Palette,
 }
 
 impl Shell {
@@ -84,6 +88,7 @@ impl Shell {
             ctrl: false,
             left_down: false,
             drag: None,
+            palette: Palette::new(),
         };
         shell.open(Box::new(crate::apps::terminal::TerminalApp::new()));
         shell
@@ -275,6 +280,52 @@ impl Shell {
         }
     }
 
+    fn act(&mut self, action: Action) {
+        match action {
+            Action::Open(name) => {
+                self.open_named(name);
+                self.palette.dismiss();
+            }
+            Action::CloseFocused => {
+                if !self.windows.is_empty() {
+                    let i = self.focus;
+                    self.windows.remove(i);
+                    self.focus = self.windows.len().saturating_sub(1);
+                }
+                self.palette.dismiss();
+            }
+            Action::Help => {
+                self.palette.hint = Some(alloc::string::String::from(
+                    "apps: terminal notes monitor clock | = expr | timer 5m | close",
+                ));
+            }
+            Action::Calc(expr) => {
+                self.palette.hint = Some(match calc::eval(&expr) {
+                    Some(v) if v.abs() < 1e15 && v == (v as i64) as f64 => {
+                        alloc::format!("= {}", v as i64)
+                    }
+                    Some(v) => alloc::format!("= {v}"),
+                    None => alloc::string::String::from("can't evaluate"),
+                });
+            }
+            Action::Timer(secs) => {
+                self.open_named("clock");
+                if let Some(win) = self.windows.get_mut(self.focus) {
+                    if let Some(clock) = win
+                        .app
+                        .as_any()
+                        .downcast_mut::<crate::apps::clock::ClockApp>()
+                    {
+                        clock.start_timer(secs);
+                    }
+                }
+                self.palette.dismiss();
+            }
+            Action::Dismiss => self.palette.dismiss(),
+            Action::None | Action::Unknown(_) => {}
+        }
+    }
+
     /// Per-frame stats feed for any open monitor window.
     pub fn stats_tick(&mut self, events: u32) {
         let now = timer::uptime_ms();
@@ -290,13 +341,35 @@ impl Shell {
     }
 
     fn on_key_down(&mut self, code: u16) {
+        const KEY_K: u16 = 37;
         if self.ctrl {
             match code {
+                KEY_K => {
+                    if self.palette.open {
+                        self.palette.dismiss()
+                    } else {
+                        self.palette.summon()
+                    }
+                }
                 keys::LEFT => self.snap_focused(SnapZone::Left),
                 keys::RIGHT => self.snap_focused(SnapZone::Right),
                 keys::UP => self.snap_focused(SnapZone::Max),
                 keys::DOWN => self.restore_focused(),
                 _ => {}
+            }
+            return;
+        }
+        if self.palette.open {
+            match code {
+                keys::ESC => self.palette.dismiss(),
+                keys::ENTER => {
+                    let action = self.palette.submit();
+                    self.act(action);
+                }
+                _ => match keycode_to_char(code, self.shift) {
+                    Some(c) => self.palette.on_char(c),
+                    None => self.palette.on_key(code),
+                },
             }
             return;
         }
@@ -344,6 +417,7 @@ impl Shell {
             })
             .collect();
         dock::draw(s, fonts, &self.backdrop, (self.width, self.height), &running);
+        self.palette.draw(s, fonts, self.width, now);
         cursor::draw(s, self.pointer.0, self.pointer.1);
     }
 }
