@@ -21,6 +21,21 @@ use super::cursor;
 pub struct Window {
     pub rect: Rect,
     pub app: Box<dyn App>,
+    /// Pre-snap geometry; Some(..) while snapped or maximized.
+    pub restore: Option<Rect>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum SnapZone {
+    Left,
+    Right,
+    Max,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum DragKind {
+    Move,
+    Resize,
 }
 
 impl Window {
@@ -49,7 +64,7 @@ pub struct Shell {
     shift: bool,
     ctrl: bool,
     left_down: bool,
-    drag: Option<(i32, i32)>, // pointer offset within the dragged window
+    drag: Option<(i32, i32, DragKind)>,
 }
 
 impl Shell {
@@ -87,6 +102,7 @@ impl Shell {
                 h: ph,
             },
             app,
+            restore: None,
         });
         self.focus = self.windows.len() - 1;
     }
@@ -105,6 +121,11 @@ impl Shell {
                         self.on_click();
                     }
                     if !down {
+                        if let Some((_, _, DragKind::Move)) = self.drag {
+                            if let Some(zone) = self.hover_zone() {
+                                self.snap_focused(zone);
+                            }
+                        }
                         self.drag = None;
                     }
                     self.left_down = down;
@@ -120,9 +141,25 @@ impl Shell {
             }
         }
 
-        if let (Some((dx, dy)), Some(win)) = (self.drag, self.windows.get_mut(self.focus)) {
-            win.rect.x = (self.pointer.0 - dx).clamp(-win.rect.w + 80, self.width - 80);
-            win.rect.y = (self.pointer.1 - dy).clamp(STATUS_H, self.height - TITLE_H);
+        let pointer = self.pointer;
+        let (width, height) = (self.width, self.height);
+        if let (Some((dx, dy, kind)), Some(win)) = (self.drag, self.windows.get_mut(self.focus)) {
+            match kind {
+                DragKind::Move => {
+                    // Moving a snapped window restores it under the pointer.
+                    if let Some(r) = win.restore.take() {
+                        win.rect.w = r.w;
+                        win.rect.h = r.h;
+                    }
+                    win.rect.x = (pointer.0 - dx).clamp(-win.rect.w + 80, width - 80);
+                    win.rect.y = (pointer.1 - dy).clamp(STATUS_H, height - TITLE_H);
+                }
+                DragKind::Resize => {
+                    let (mw, mh) = win.app.min_size();
+                    win.rect.w = (pointer.0 - win.rect.x + dx).clamp(mw, width - win.rect.x - 4);
+                    win.rect.h = (pointer.1 - win.rect.y + dy).clamp(mh, height - win.rect.y - 4);
+                }
+            }
         }
     }
 
@@ -146,15 +183,69 @@ impl Shell {
             let win = self.windows.remove(i);
             self.windows.push(win);
             self.focus = self.windows.len() - 1;
-            if py < self.windows[self.focus].rect.y + TITLE_H {
-                let r = self.windows[self.focus].rect;
-                self.drag = Some((px - r.x, py - r.y));
+            let r = self.windows[self.focus].rect;
+            if px >= r.x + r.w - 18 && py >= r.y + r.h - 18 {
+                // Resize grip: remember pointer offset from the corner.
+                self.drag = Some((r.x + r.w - px, r.y + r.h - py, DragKind::Resize));
+            } else if py < r.y + TITLE_H {
+                self.drag = Some((px - r.x, py - r.y, DragKind::Move));
             }
             return;
         }
 
         if let Some(name) = dock::hit_test((px, py), (self.width, self.height)) {
             self.open_named(name);
+        }
+    }
+
+    fn zone_rect(&self, zone: SnapZone) -> Rect {
+        let top = STATUS_H + 8;
+        let bottom = self.height - 90; // keep clear of the dock band
+        match zone {
+            SnapZone::Left => Rect { x: 8, y: top, w: self.width / 2 - 12, h: bottom - top },
+            SnapZone::Right => Rect {
+                x: self.width / 2 + 4,
+                y: top,
+                w: self.width / 2 - 12,
+                h: bottom - top,
+            },
+            SnapZone::Max => Rect { x: 16, y: top, w: self.width - 32, h: bottom - top },
+        }
+    }
+
+    fn hover_zone(&self) -> Option<SnapZone> {
+        let (px, py) = self.pointer;
+        if px < 16 {
+            Some(SnapZone::Left)
+        } else if px >= self.width - 16 {
+            Some(SnapZone::Right)
+        } else if py < STATUS_H + 8 {
+            Some(SnapZone::Max)
+        } else {
+            None
+        }
+    }
+
+    fn snap_focused(&mut self, zone: SnapZone) {
+        let rect = self.zone_rect(zone);
+        if let Some(win) = self.windows.get_mut(self.focus) {
+            if win.restore.is_none() {
+                win.restore = Some(win.rect);
+            }
+            win.rect = rect;
+        }
+    }
+
+    fn restore_focused(&mut self) {
+        let (width, height) = (self.width, self.height);
+        if let Some(win) = self.windows.get_mut(self.focus) {
+            if let Some(mut r) = win.restore.take() {
+                // The snapshot may have been taken mid-drag at a screen
+                // edge; always restore fully on-screen.
+                r.x = r.x.clamp(8, (width - r.w - 8).max(8));
+                r.y = r.y.clamp(STATUS_H + 8, (height - r.h - 8).max(STATUS_H + 8));
+                win.rect = r;
+            }
         }
     }
 
@@ -200,7 +291,14 @@ impl Shell {
 
     fn on_key_down(&mut self, code: u16) {
         if self.ctrl {
-            return; // shortcuts arrive with W3/W4
+            match code {
+                keys::LEFT => self.snap_focused(SnapZone::Left),
+                keys::RIGHT => self.snap_focused(SnapZone::Right),
+                keys::UP => self.snap_focused(SnapZone::Max),
+                keys::DOWN => self.restore_focused(),
+                _ => {}
+            }
+            return;
         }
         if let Some(win) = self.windows.get_mut(self.focus) {
             match keycode_to_char(code, self.shift) {
@@ -217,6 +315,19 @@ impl Shell {
         let focus = self.focus;
         for i in 0..self.windows.len() {
             draw_window(s, fonts, &mut self.windows[i], i == focus, now);
+        }
+
+        // Snap preview while dragging near an edge.
+        if matches!(self.drag, Some((_, _, DragKind::Move))) {
+            if let Some(zone) = self.hover_zone() {
+                let z = self.zone_rect(zone);
+                let a = with_alpha(ACCENT, 200);
+                s.fill_rounded_rect(z.x, z.y, z.w, z.h, RADIUS, with_alpha(ACCENT, 36));
+                s.fill_rect(z.x + RADIUS, z.y, z.w - 2 * RADIUS, 2, a);
+                s.fill_rect(z.x + RADIUS, z.y + z.h - 2, z.w - 2 * RADIUS, 2, a);
+                s.fill_rect(z.x, z.y + RADIUS, 2, z.h - 2 * RADIUS, a);
+                s.fill_rect(z.x + z.w - 2, z.y + RADIUS, 2, z.h - 2 * RADIUS, a);
+            }
         }
 
         statusbar::draw(s, fonts, &self.backdrop, self.width);
@@ -279,6 +390,12 @@ fn draw_window(s: &mut Surface, fonts: &mut Fonts, win: &mut Window, focused: bo
     fonts
         .mono
         .draw(s, "x", 13.0, cx - xw / 2, cy - 9, TEXT_DIM);
+
+    // Resize grip affordance: two short diagonal ticks.
+    for i in 0..2 {
+        let off = 6 + i * 4;
+        s.fill_rect(r.x + r.w - off - 4, r.y + r.h - 7, off, 2, with_alpha(TEXT_DIM, 130));
+    }
 
     let body = win.body();
     win.app.draw(s, fonts, body, focused, now);
