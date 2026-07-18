@@ -22,3 +22,9 @@ pub fn init_heap(map: &MemoryMapOwned) -> usize {
     }
     size
 }
+
+/// (used, free) heap bytes.
+pub fn stats() -> (usize, usize) {
+    let heap = HEAP.lock();
+    (heap.used(), heap.free())
+}

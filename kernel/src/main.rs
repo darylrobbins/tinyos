@@ -9,7 +9,16 @@ mod arch;
 mod drivers;
 mod gfx;
 mod mem;
+mod term;
 mod ui;
+
+pub const VERSION: &str = "0.1.0";
+
+static FB_SIZE: spin::Once<(usize, usize)> = spin::Once::new();
+
+pub fn fb_size() -> (usize, usize) {
+    *FB_SIZE.get().unwrap_or(&(0, 0))
+}
 
 use uefi::boot::{self, MemoryType};
 use uefi::mem::memory_map::MemoryMapOwned;
@@ -92,8 +101,10 @@ fn kmain(fb: FbInfo, memory_map: MemoryMapOwned) -> ! {
     ui::splash::run(&fb, &mut surface, &mut fonts);
     kprintln!("tinyos: splash done (uptime {} ms)", arch::timer::uptime_ms());
 
+    FB_SIZE.call_once(|| (fb.width, fb.height));
     let mut input = drivers::input::Input::init();
     let mut desktop = ui::desktop::Desktop::new(fb.width, fb.height);
+    let mut terminal = term::Terminal::new();
     kprintln!("tinyos: desktop up");
 
     let mut events = alloc::vec::Vec::new();
@@ -103,17 +114,12 @@ fn kmain(fb: FbInfo, memory_map: MemoryMapOwned) -> ! {
         shell_events.clear();
         input.poll(&mut events);
         desktop.handle(&events, &mut shell_events);
+        for ev in &shell_events {
+            terminal.handle(ev);
+        }
 
         desktop.compose(&mut surface, &mut fonts, |surface, fonts, win| {
-            let (cx, cy) = win.content_origin();
-            fonts.mono.draw(
-                surface,
-                "tinyOS terminal - ready.",
-                15.0,
-                cx,
-                cy + 4,
-                gfx::surface::rgb(140, 225, 190),
-            );
+            terminal.draw(surface, fonts, win);
         });
         surface.present(&fb);
 
