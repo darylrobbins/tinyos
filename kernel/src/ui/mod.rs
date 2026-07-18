@@ -1,5 +1,7 @@
 pub mod cursor;
+pub mod desktop;
 pub mod splash;
+pub mod wallpaper;
 
 /// Ease-in-out cubic, t in 0.0..=1.0.
 pub fn ease(t: f32) -> f32 {

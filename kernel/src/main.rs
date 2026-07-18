@@ -92,67 +92,30 @@ fn kmain(fb: FbInfo, memory_map: MemoryMapOwned) -> ! {
     ui::splash::run(&fb, &mut surface, &mut fonts);
     kprintln!("tinyos: splash done (uptime {} ms)", arch::timer::uptime_ms());
 
-    let input = drivers::input::Input::init();
-    input_demo(&fb, &mut surface, &mut fonts, input)
-}
-
-/// M3 demo: echo keys, track the pointer, draw the cursor.
-fn input_demo(
-    fb: &FbInfo,
-    surface: &mut gfx::surface::Surface,
-    fonts: &mut gfx::font::Fonts,
-    mut input: drivers::input::Input,
-) -> ! {
-    use drivers::input::{keycode_to_char, keys, Event, ABS_MAX};
-    use gfx::surface::rgb;
+    let mut input = drivers::input::Input::init();
+    let mut desktop = ui::desktop::Desktop::new(fb.width, fb.height);
+    kprintln!("tinyos: desktop up");
 
     let mut events = alloc::vec::Vec::new();
-    let (mut px, mut py) = (surface.width as i32 / 2, surface.height as i32 / 2);
-    let mut shift = false;
-    let mut typed = alloc::string::String::new();
-    let mut buttons = (false, false);
-
+    let mut shell_events = alloc::vec::Vec::new();
     loop {
         events.clear();
+        shell_events.clear();
         input.poll(&mut events);
-        for ev in &events {
-            match *ev {
-                Event::PointerX(v) => px = (v * (surface.width as u32 - 1) / ABS_MAX) as i32,
-                Event::PointerY(v) => py = (v * (surface.height as u32 - 1) / ABS_MAX) as i32,
-                Event::Button { right, down } => {
-                    if right {
-                        buttons.1 = down
-                    } else {
-                        buttons.0 = down
-                    }
-                }
-                Event::Key { code, down } => {
-                    if code == keys::LSHIFT || code == keys::RSHIFT {
-                        shift = down;
-                    } else if down {
-                        if code == keys::BACKSPACE {
-                            typed.pop();
-                        } else if let Some(c) = keycode_to_char(code, shift) {
-                            typed.push(c);
-                        }
-                    }
-                }
-                Event::Frame => {}
-            }
-        }
+        desktop.handle(&events, &mut shell_events);
 
-        surface.clear(rgb(14, 14, 20));
-        fonts.ui_medium.draw(surface, "tinyOS input demo", 28.0, 40, 40, rgb(240, 240, 245));
-        let line = alloc::format!("typed: {typed}");
-        fonts.mono.draw(surface, &line, 20.0, 40, 110, rgb(140, 220, 200));
-        let stat = alloc::format!(
-            "pointer: {px},{py}  buttons: L={} R={}",
-            buttons.0 as u8,
-            buttons.1 as u8
-        );
-        fonts.mono.draw(surface, &stat, 20.0, 40, 150, rgb(160, 160, 180));
-        ui::cursor::draw(surface, px, py);
-        surface.present(fb);
+        desktop.compose(&mut surface, &mut fonts, |surface, fonts, win| {
+            let (cx, cy) = win.content_origin();
+            fonts.mono.draw(
+                surface,
+                "tinyOS terminal - ready.",
+                15.0,
+                cx,
+                cy + 4,
+                gfx::surface::rgb(140, 225, 190),
+            );
+        });
+        surface.present(&fb);
 
         let next = arch::timer::uptime_us() / 16_667 * 16_667 + 16_667;
         arch::timer::wait_until_us(next);

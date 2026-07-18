@@ -145,6 +145,103 @@ impl Surface {
         }
     }
 
+    /// Whole-surface copy (dimensions must match).
+    pub fn copy_from(&mut self, src: &Surface) {
+        self.pixels.copy_from_slice(&src.pixels);
+    }
+
+    /// Two-pass box blur; returns a new surface. Run once on static
+    /// content (the wallpaper) to back frosted-glass panels.
+    pub fn blurred(&self, radius: usize) -> Surface {
+        let (w, h) = (self.width, self.height);
+        let r = radius as i32;
+        let win = 2 * radius as u32 + 1;
+        let clamp = |v: i32, hi: i32| v.clamp(0, hi - 1) as usize;
+        let mut tmp = Surface::new(w, h);
+        let mut out = Surface::new(w, h);
+
+        let mut pass = |src: &[u32], dst: &mut [u32], len: i32, stride: usize, line_base: usize| {
+            let at = |i: i32| src[line_base + clamp(i, len) * stride];
+            let (mut sr, mut sg, mut sb) = (0u32, 0u32, 0u32);
+            for i in -r..=r {
+                let c = at(i);
+                sr += c >> 16 & 0xFF;
+                sg += c >> 8 & 0xFF;
+                sb += c & 0xFF;
+            }
+            for i in 0..len {
+                dst[line_base + i as usize * stride] =
+                    0xFF00_0000 | (sr / win) << 16 | (sg / win) << 8 | sb / win;
+                let add = at(i + r + 1);
+                let sub = at(i - r);
+                sr += (add >> 16 & 0xFF).wrapping_sub(sub >> 16 & 0xFF);
+                sg += (add >> 8 & 0xFF).wrapping_sub(sub >> 8 & 0xFF);
+                sb += (add & 0xFF).wrapping_sub(sub & 0xFF);
+            }
+        };
+
+        for y in 0..h {
+            pass(&self.pixels, &mut tmp.pixels, w as i32, 1, y * w);
+        }
+        let tmp_pixels = tmp.pixels.clone();
+        for x in 0..w {
+            pass(&tmp_pixels, &mut out.pixels, h as i32, w, x);
+        }
+        out
+    }
+
+    /// Rounded-corner pixel coverage for a rect at (x,y,w,h) radius r.
+    fn corner_coverage(x: i32, y: i32, w: i32, h: i32, r: i32, px: i32, py: i32) -> f32 {
+        let cx = if px < x + r {
+            x + r
+        } else if px >= x + w - r {
+            x + w - r - 1
+        } else {
+            return 1.0;
+        };
+        let cy = if py < y + r {
+            y + r
+        } else if py >= y + h - r {
+            y + h - r - 1
+        } else {
+            return 1.0;
+        };
+        let dx = (px - cx) as f32;
+        let dy = (py - cy) as f32;
+        (r as f32 + 0.5 - libm::sqrtf(dx * dx + dy * dy)).clamp(0.0, 1.0)
+    }
+
+    /// Frosted-glass panel: rounded rect whose pixels sample a pre-blurred
+    /// backdrop, overlaid with `tint`, edged with a hairline highlight.
+    pub fn frosted_panel(
+        &mut self,
+        backdrop: &Surface,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        r: i32,
+        tint: u32,
+    ) {
+        for py in y.max(0)..(y + h).min(self.height as i32) {
+            for px in x.max(0)..(x + w).min(self.width as i32) {
+                let cov = Self::corner_coverage(x, y, w, h, r, px, py);
+                if cov <= 0.0 {
+                    continue;
+                }
+                let idx = py as usize * self.width + px as usize;
+                let base = backdrop.pixels[py as usize * backdrop.width + px as usize];
+                let mut c = over(base, tint);
+                // Hairline light edge on the top row of the panel.
+                if py - y <= 1 {
+                    c = over(c, 0x2EFF_FFFF);
+                }
+                let a = (cov * 255.0) as u32;
+                self.pixels[idx] = over(self.pixels[idx], (c & 0x00FF_FFFF) | a << 24);
+            }
+        }
+    }
+
     /// Copy this surface to the hardware framebuffer.
     pub fn present(&self, fb: &FbInfo) {
         let w = self.width.min(fb.width);
