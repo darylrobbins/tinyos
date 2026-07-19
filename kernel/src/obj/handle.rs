@@ -29,6 +29,7 @@ impl Handle {
     }
 }
 
+#[derive(Default)]
 pub struct HandleTable {
     slots: Vec<Option<Handle>>,
 }

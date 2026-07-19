@@ -131,6 +131,26 @@ pub fn boot_hook() {
             Ok(id) => kprintln!("tinyos: boottest spawned EL0 sys-test thread {id}"),
             Err(e) => kprintln!("tinyos: boottest FAILED: {e}"),
         },
+        Some("run") => {
+            sched::spawn(
+                alloc::string::String::from("boottest"),
+                Class::Normal,
+                0b0001,
+                run_hello_watchdog,
+            );
+        }
+        Some("spawnonly") => {
+            // Spawn hello directly (no watchdog), let it exit; UI heartbeat
+            // tells us if the system survives teardown.
+            let argv = [alloc::string::String::from("a"), alloc::string::String::from("b")];
+            match crate::fs::read("/apps/hello") {
+                Some(elf) => match super::loader::spawn(alloc::string::String::from("hello"), &elf, &argv) {
+                    Ok(app) => kprintln!("tinyos: spawnonly thread {}", app.thread_id),
+                    Err(e) => kprintln!("tinyos: spawnonly FAILED {}", e.msg()),
+                },
+                None => kprintln!("tinyos: spawnonly no hello"),
+            }
+        }
         Some("fs") => {
             for path in ["/", "/apps"] {
                 match crate::fs::list(path) {
@@ -149,6 +169,76 @@ pub fn boot_hook() {
             }
         }
         _ => {}
+    }
+}
+
+/// Headless end-to-end: load /apps/hello with argv, pump its console to
+/// serial, and report the exit code. Mirrors what the terminal `run` does.
+/// Runs twice to prove repeatability + continued liveness after teardown.
+fn run_hello_watchdog() {
+    run_hello_once();
+    kprintln!("tinyos: runtest done, system alive");
+}
+
+fn run_hello_once() {
+    let argv = [
+        alloc::string::String::from("alpha"),
+        alloc::string::String::from("beta"),
+        alloc::string::String::from("gamma"),
+    ];
+    let elf = match crate::fs::read("/apps/hello") {
+        Some(e) => e,
+        None => {
+            kprintln!("tinyos: runtest FAILED: /apps/hello not found");
+            return;
+        }
+    };
+    let app = match super::loader::spawn(alloc::string::String::from("hello"), &elf, &argv) {
+        Ok(a) => a,
+        Err(e) => {
+            kprintln!("tinyos: runtest FAILED: {}", e.msg());
+            return;
+        }
+    };
+    const OP_WRITE: u32 = 1;
+    let deadline = crate::arch::timer::uptime_us() + 3_000_000;
+    let mut drain = |console: &alloc::sync::Arc<super::channel::ChannelEnd>| {
+        while let Ok(msg) = console.recv() {
+            if msg.bytes.len() >= 4
+                && u32::from_le_bytes(msg.bytes[0..4].try_into().unwrap()) == OP_WRITE
+            {
+                if let Ok(s) = core::str::from_utf8(&msg.bytes[4..]) {
+                    for line in s.lines() {
+                        kprintln!("tinyos: runtest| {line}");
+                    }
+                }
+            }
+        }
+    };
+    // Poll cooperatively. This vCPU must not peg a host core under HVF (that
+    // starves the emulated APs running the app); a periodic serial write per
+    // iteration paces it host-friendly. The real terminal drains from a
+    // frame-driven pump that blocks between frames, so it never busy-loops.
+    let mut it = 0u64;
+    loop {
+        it += 1;
+        if it <= 8 || it % 100_000 == 0 {
+            kprintln!("tinyos: runtest draining (iter {it})");
+        }
+        drain(&app.console);
+        if let Some(code) = app.process.exited() {
+            drain(&app.console); // catch anything queued before exit
+            kprintln!(
+                "tinyos: runtest exit code {code} (expect 3) {}",
+                if code == 3 { "PASS" } else { "FAIL" }
+            );
+            return;
+        }
+        if crate::arch::timer::uptime_us() > deadline {
+            kprintln!("tinyos: runtest FAILED: timeout");
+            return;
+        }
+        sched::yield_now();
     }
 }
 

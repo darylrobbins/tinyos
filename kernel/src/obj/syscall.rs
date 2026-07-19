@@ -82,6 +82,10 @@ pub fn dispatch(sysno: u64, args: [u64; 6]) -> (u32, u64) {
 /// Terminal exit path for the calling user thread: record the process exit
 /// (closing its handles, waking watchers), then leave the scheduler.
 pub fn exit_current(code: i32) -> ! {
+    // Disarm the EL0 preemption timer this thread armed on its last entry —
+    // otherwise it stays pending and fires into the idle thread we switch to.
+    #[cfg(target_arch = "aarch64")]
+    crate::arch::timer::clear_timer();
     let me = crate::sched::current();
     kprintln!("app[{}]: exit({code})", me.id);
     if let Some(p) = &me.proc {

@@ -10,6 +10,7 @@ use spin::Mutex;
 
 use crate::arch::paging::AddrSpace;
 
+use super::channel::ChannelEnd;
 use super::handle::HandleTable;
 use super::memobj::MemObj;
 
@@ -24,6 +25,9 @@ pub struct Process {
     /// MemObjs mapped into this process: keeps their frames alive at least
     /// as long as the address space that references them.
     pub mapped: Mutex<Vec<Arc<MemObj>>>,
+    /// Kernel-held channel ends kept alive for the process's lifetime (the
+    /// bootstrap main-channel end the kernel never speaks on again).
+    pub keep: Mutex<Vec<Arc<ChannelEnd>>>,
     exit: AtomicU64, // EXITED_BIT | code (u32)
 }
 
@@ -39,6 +43,7 @@ impl Process {
             handles: Mutex::new(HandleTable::new()),
             main_thread: AtomicU32::new(0),
             mapped: Mutex::new(Vec::new()),
+            keep: Mutex::new(Vec::new()),
             exit: AtomicU64::new(0),
         });
         PROCESSES.lock().push(p.clone());
@@ -63,6 +68,7 @@ impl Process {
             .store(EXITED_BIT | code as u32 as u64, Ordering::Release);
         self.handles.lock().clear();
         self.mapped.lock().clear();
+        self.keep.lock().clear();
         PROCESSES.lock().retain(|p| p.id != self.id);
         super::wake_objects();
     }

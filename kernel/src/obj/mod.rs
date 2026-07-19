@@ -3,6 +3,7 @@
 
 pub mod channel;
 pub mod handle;
+pub mod loader;
 pub mod memobj;
 pub mod objtest;
 pub mod process;

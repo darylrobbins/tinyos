@@ -12,6 +12,7 @@ pub const USER_BASE: u64 = 0;
 pub const APP_IMAGE_BASE: u64 = 0;
 
 pub fn sync_icache(_pa: usize, _len: usize) {}
+pub fn sync_dcache(_pa: usize, _len: usize) {}
 
 pub struct AddrSpace;
 
@@ -27,6 +28,12 @@ impl AddrSpace {
     pub fn map(&mut self, _va: u64, _pa: usize, _len: usize, _f: MapFlags, _own: bool) -> Option<()> {
         None
     }
+
+    pub fn map_page(&mut self, _va: u64, _pa: usize, _f: MapFlags) -> Option<()> {
+        None
+    }
+
+    pub fn own_block(&mut self, _pa: usize, _pages: usize) {}
 
     pub fn protect(&mut self, _va: u64, _len: usize, _f: MapFlags) {}
 

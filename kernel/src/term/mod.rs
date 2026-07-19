@@ -35,6 +35,16 @@ pub struct Terminal {
     cursor: usize,
     history: Vec<String>,
     hist_idx: Option<usize>,
+    /// A foreground app launched via `run`, if any.
+    running: Option<RunningApp>,
+}
+
+struct RunningApp {
+    process: alloc::sync::Arc<crate::obj::process::Process>,
+    thread_id: u32,
+    console: alloc::sync::Arc<crate::obj::channel::ChannelEnd>,
+    /// Partial line accumulated from console WRITE bytes (flushed on '\n').
+    partial: String,
 }
 
 impl Terminal {
@@ -46,6 +56,7 @@ impl Terminal {
             cursor: 0,
             history: Vec::new(),
             hist_idx: None,
+            running: None,
         };
         t.out(format!("tinyOS {VERSION} - type 'help' to get started"), DIM);
         t
@@ -145,7 +156,9 @@ impl Terminal {
                     ("uptime", "time since boot"),
                     ("date", "current date and time"),
                     ("spin [n]", "spawn n busy threads on cores 1-3"),
-                    ("ps", "list threads"),
+                    ("ls [path]", "list files on the ESP volume"),
+                    ("run <name>", "run an app from /apps"),
+                    ("ps", "list threads and processes"),
                     ("kill <id>", "stop a thread"),
                     ("about", "about tinyOS"),
                 ] {
@@ -233,6 +246,7 @@ impl Terminal {
                     None => self.out(format!("ls: cannot access '{path}'"), ERR),
                 }
             }
+            "run" => self.run_app(rest.trim()),
             "usertest" => self.usertest(rest.trim()),
             "objtest" => {
                 for line in crate::obj::objtest::run() {
@@ -245,6 +259,85 @@ impl Terminal {
                 ERR,
             ),
             _ => self.out(format!("command not found: {name}"), ERR),
+        }
+    }
+
+    /// Load and run an app from /apps/<name> with argv.
+    fn run_app(&mut self, args: &str) {
+        if self.running.is_some() {
+            self.out("run: an app is already running".to_string(), ERR);
+            return;
+        }
+        let mut parts = args.split_whitespace();
+        let Some(name) = parts.next() else {
+            self.out("usage: run <name> [args...]".to_string(), ERR);
+            return;
+        };
+        let argv: Vec<String> = parts.map(|s| s.to_string()).collect();
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            let _ = (name, argv);
+            self.out("run: userspace unsupported on this arch".to_string(), ERR);
+            return;
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            let path = format!("/apps/{name}");
+            let Some(elf) = crate::fs::read(&path) else {
+                self.out(format!("run: {name}: not found in /apps"), ERR);
+                return;
+            };
+            match crate::obj::loader::spawn(name.to_string(), &elf, &argv) {
+                Ok(app) => {
+                    self.out(format!("run: started {name} (thread {})", app.thread_id), DIM);
+                    self.running = Some(RunningApp {
+                        process: app.process,
+                        thread_id: app.thread_id,
+                        console: app.console,
+                        partial: String::new(),
+                    });
+                }
+                Err(e) => self.out(format!("run: {name}: {}", e.msg()), ERR),
+            }
+        }
+    }
+
+    /// Drain a running app's console output and detect its exit. Called each
+    /// frame from the hosting card.
+    pub fn pump(&mut self) {
+        let Some(app) = &mut self.running else { return };
+        const OP_WRITE: u32 = 1;
+        let mut lines: Vec<(String, u32)> = Vec::new();
+        // Drain all queued console messages.
+        while let Ok(msg) = app.console.recv() {
+            if msg.bytes.len() < 4 {
+                continue;
+            }
+            let op = u32::from_le_bytes(msg.bytes[0..4].try_into().unwrap());
+            if op != OP_WRITE {
+                continue;
+            }
+            if let Ok(s) = core::str::from_utf8(&msg.bytes[4..]) {
+                for ch in s.chars() {
+                    if ch == '\n' {
+                        lines.push((core::mem::take(&mut app.partial), FG));
+                    } else {
+                        app.partial.push(ch);
+                    }
+                }
+            }
+        }
+        let exited = app.process.exited();
+        for (line, color) in lines {
+            self.out(line, color);
+        }
+        if let Some(code) = exited {
+            // Flush any trailing partial line, then report.
+            let app = self.running.take().unwrap();
+            if !app.partial.is_empty() {
+                self.out(app.partial, FG);
+            }
+            self.out(format!("[{}] exited (code {code})", app.thread_id), DIM);
         }
     }
 

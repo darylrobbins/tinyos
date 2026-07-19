@@ -49,9 +49,9 @@ struct Mapping {
 pub struct AddrSpace {
     root: usize, // PA of the L1 table
     asid: u16,
-    tables: Vec<usize>,   // PAs of L2/L3 tables (freed on drop)
-    owned: Vec<usize>,    // PAs of data frames we free on drop
-    maps: Vec<Mapping>,   // for user-pointer validation
+    tables: Vec<usize>,       // PAs of L2/L3 tables (freed on drop)
+    owned: Vec<(usize, usize)>, // (PA, page_count) blocks freed on drop
+    maps: Vec<Mapping>,       // for user-pointer validation
     bump: u64,
 }
 
@@ -130,7 +130,8 @@ impl AddrSpace {
 
     /// Map `len` bytes (frame-aligned) of physical memory at `va`. If `own`,
     /// the frames are freed when the space drops (image/stack pages; memobj
-    /// frames stay owned by their MemObj).
+    /// frames stay owned by their MemObj). A page already mapped is
+    /// re-pointed — callers must avoid double-owning the same frame.
     pub fn map(&mut self, va: u64, pa: usize, len: usize, flags: MapFlags, own: bool) -> Option<()> {
         debug_assert_eq!(va % FRAME_SIZE as u64, 0);
         debug_assert_eq!(pa % FRAME_SIZE, 0);
@@ -140,15 +141,27 @@ impl AddrSpace {
             unsafe { e.write_volatile(Self::page_desc(pa + i * FRAME_SIZE, flags)) };
         }
         if own {
-            // Contiguous alloc_frames block: record base for a single free.
-            self.owned.push(pa);
-            self.maps.push(Mapping { va, len: (pages * FRAME_SIZE) as u64, flags });
-            // Track page count via len in maps; owned frees use maps lookup.
-        } else {
-            self.maps.push(Mapping { va, len: (pages * FRAME_SIZE) as u64, flags });
+            self.owned.push((pa, pages));
         }
+        self.maps.push(Mapping { va, len: (pages * FRAME_SIZE) as u64, flags });
         unsafe { asm!("dsb ishst") };
         Some(())
+    }
+
+    /// Map a single page with its own flags (loader use: image pages sharing
+    /// a frame get per-page permissions). Ownership of the backing block is
+    /// registered once via `own_block`.
+    pub fn map_page(&mut self, va: u64, pa: usize, flags: MapFlags) -> Option<()> {
+        let e = self.entry(va)?;
+        unsafe { e.write_volatile(Self::page_desc(pa, flags)) };
+        self.maps.push(Mapping { va, len: FRAME_SIZE as u64, flags });
+        unsafe { asm!("dsb ishst") };
+        Some(())
+    }
+
+    /// Register a contiguous frame block to be freed when the space drops.
+    pub fn own_block(&mut self, pa: usize, pages: usize) {
+        self.owned.push((pa, pages));
     }
 
     /// Reserve a kernel-chosen VA range (page-aligned) for `len` bytes.
@@ -214,15 +227,8 @@ impl Drop for AddrSpace {
             asm!("dsb ishst", "tlbi aside1is, {0}", "dsb ish", "isb",
                  in(reg) (self.asid as u64) << 48);
         }
-        // Owned data frames: each entry in `owned` is the base of one
-        // contiguous alloc_frames block whose length is the matching mapping.
-        for &pa in &self.owned {
-            if let Some(m) = self.maps.iter().find(|m| {
-                // find mapping whose backing base is pa
-                self.frame_of(m.va) == Some(pa)
-            }) {
-                unsafe { free_frames(pa, (m.len as usize).div_ceil(FRAME_SIZE)) };
-            }
+        for &(pa, pages) in &self.owned {
+            unsafe { free_frames(pa, pages) };
         }
         for &t in &self.tables {
             unsafe { free_frames(t, 1) };
@@ -231,23 +237,17 @@ impl Drop for AddrSpace {
     }
 }
 
-impl AddrSpace {
-    /// PA backing `va`, if mapped (walk without creating).
-    fn frame_of(&self, va: u64) -> Option<usize> {
-        let l1i = ((va >> 30) & 0xF) as usize;
-        let l2i = ((va >> 21) & 0x1FF) as usize;
-        let l3i = ((va >> 12) & 0x1FF) as usize;
-        let mut tbl = self.root;
-        for idx in [l1i, l2i] {
-            let desc = unsafe { Self::table(tbl).add(idx).read_volatile() };
-            if desc & 1 == 0 {
-                return None;
-            }
-            tbl = (desc & PA_MASK) as usize;
-        }
-        let desc = unsafe { Self::table(tbl).add(l3i).read_volatile() };
-        if desc & 1 == 0 { None } else { Some((desc & PA_MASK) as usize) }
+/// Clean the dcache to point-of-coherency over a range so bytes a kernel
+/// thread wrote (through the identity map) are visible to a user thread that
+/// may run on another core. Needed for every loaded data page; code pages
+/// additionally go through `sync_icache`.
+pub fn sync_dcache(pa: usize, len: usize) {
+    let mut a = pa & !63;
+    while a < pa + len {
+        unsafe { asm!("dc cvac, {0}", in(reg) a) };
+        a += 64;
     }
+    unsafe { asm!("dsb ish") };
 }
 
 /// Make freshly written code visible to instruction fetch: clean dcache to
