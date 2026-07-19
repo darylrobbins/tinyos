@@ -40,8 +40,6 @@ pub struct Terminal {
     /// An `edit <file>` request for the shell to open an editor window,
     /// as (cwd, path). Drained each frame by `Shell::pump_app_requests`.
     pending_edit: Option<(String, String)>,
-    /// A `vi <file>` request for the shell to open a vi window, as (cwd, path).
-    pending_vi: Option<(String, String)>,
     /// Visible rows in cells (from the hosting card), for OP_RESIZE.
     rows: usize,
 }
@@ -115,7 +113,6 @@ impl Terminal {
             running: None,
             bg_jobs: Vec::new(),
             pending_edit: None,
-            pending_vi: None,
             rows: 24,
         };
         t.refresh_prompt();
@@ -134,10 +131,6 @@ impl Terminal {
         self.pending_edit.take()
     }
 
-    /// Take a pending `vi <file>` request, if any (shell drains this).
-    pub fn take_pending_vi(&mut self) -> Option<(String, String)> {
-        self.pending_vi.take()
-    }
 
     /// Prompt path segment, spaces included (" / ", " /notes ").
     fn prompt_path(&self) -> String {
@@ -425,12 +418,13 @@ impl Terminal {
                     self.pending_edit = Some((self.cwd.clone(), p.to_string()));
                 }
             }
+            // vi is a userspace terminal app now (Phase 4 eviction).
             "vi" => {
                 let p = rest.trim();
                 if p.is_empty() {
                     self.out("usage: vi <file>".to_string(), ERR);
                 } else {
-                    self.pending_vi = Some((self.cwd.clone(), p.to_string()));
+                    self.run_app(&format!("vi {p}"));
                 }
             }
             "write" | "append" => match rest.trim().split_once(' ') {

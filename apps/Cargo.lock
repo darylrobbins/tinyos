@@ -3,6 +3,14 @@
 version = 4
 
 [[package]]
+name = "clock"
+version = "0.1.0"
+dependencies = [
+ "tinyos-abi",
+ "tinyos-app",
+]
+
+[[package]]
 name = "greet"
 version = "0.1.0"
 dependencies = [
@@ -106,6 +114,20 @@ dependencies = [
  "tinyos-abi",
  "tinyos-app",
 ]
+
+[[package]]
+name = "vi"
+version = "0.1.0"
+dependencies = [
+ "textui",
+ "tinyos-abi",
+ "tinyos-app",
+ "vicore",
+]
+
+[[package]]
+name = "vicore"
+version = "0.1.0"
 
 [[package]]
 name = "view"

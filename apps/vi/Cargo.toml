@@ -1,0 +1,14 @@
+[package]
+name = "vi"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tinyos-app = { path = "../sdk" }
+textui = { path = "../../crates/textui" }
+abi = { package = "tinyos-abi", path = "../../crates/abi" }
+vicore = { path = "../../crates/vicore" }
+
+[[bin]]
+name = "vi"
+path = "src/main.rs"

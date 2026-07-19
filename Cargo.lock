@@ -71,7 +71,6 @@ dependencies = [
  "tinyfs",
  "tinyos-abi",
  "uefi",
- "vicore",
 ]
 
 [[package]]
