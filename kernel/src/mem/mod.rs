@@ -22,6 +22,8 @@ pub fn init_heap(map: &MemoryMapOwned) -> usize {
     unsafe {
         HEAP.lock().init(region.phys_start as *mut u8, size);
     }
+    // Every other conventional region becomes the physical frame pool.
+    frames::init(map, region.phys_start as usize);
     size
 }
 

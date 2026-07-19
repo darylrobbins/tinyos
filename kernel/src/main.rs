@@ -100,7 +100,12 @@ fn kmain(mut fb: FbInfo, memory_map: MemoryMapOwned) -> ! {
     arch::exceptions::install();
 
     let heap_bytes = mem::init_heap(&memory_map);
-    kprintln!("tinyos: heap {} MiB", heap_bytes / (1024 * 1024));
+    let (pool_bytes, _) = mem::frames::pool_stats();
+    kprintln!(
+        "tinyos: heap {} MiB, frame pool {} MiB",
+        heap_bytes / (1024 * 1024),
+        pool_bytes / (1024 * 1024)
+    );
 
     #[cfg(target_arch = "aarch64")]
     {
