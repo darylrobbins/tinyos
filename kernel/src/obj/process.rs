@@ -4,7 +4,7 @@
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use spin::Mutex;
 
@@ -15,6 +15,10 @@ use super::handle::HandleTable;
 use super::memobj::MemObj;
 
 const EXITED_BIT: u64 = 1 << 63;
+
+/// Per-process physical-memory quota: MemObjs plus the image and stack.
+/// Page-table frames (a handful) are deliberately not charged.
+pub const MEM_QUOTA: usize = 64 * 1024 * 1024;
 
 pub struct Process {
     pub id: u32,
@@ -29,6 +33,8 @@ pub struct Process {
     /// bootstrap main-channel end the kernel never speaks on again).
     pub keep: Mutex<Vec<Arc<ChannelEnd>>>,
     exit: AtomicU64, // EXITED_BIT | code (u32)
+    /// Physical bytes charged against MEM_QUOTA.
+    mem_charged: AtomicUsize,
 }
 
 static NEXT_PID: AtomicU32 = AtomicU32::new(1);
@@ -45,9 +51,44 @@ impl Process {
             mapped: Mutex::new(Vec::new()),
             keep: Mutex::new(Vec::new()),
             exit: AtomicU64::new(0),
+            mem_charged: AtomicUsize::new(0),
         });
         PROCESSES.lock().push(p.clone());
         p
+    }
+
+    /// Charge `bytes` against the quota; false (nothing charged) if it
+    /// would exceed MEM_QUOTA.
+    pub fn try_charge(&self, bytes: usize) -> bool {
+        let mut cur = self.mem_charged.load(Ordering::Relaxed);
+        loop {
+            let Some(next) = cur.checked_add(bytes).filter(|n| *n <= MEM_QUOTA) else {
+                return false;
+            };
+            match self.mem_charged.compare_exchange_weak(
+                cur,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(c) => cur = c,
+            }
+        }
+    }
+
+    /// Charge without a quota check — for kernel-controlled allocations at
+    /// spawn (image, stack) that must not have a teardown failure path.
+    pub fn charge(&self, bytes: usize) {
+        self.mem_charged.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    pub fn uncharge(&self, bytes: usize) {
+        self.mem_charged.fetch_sub(bytes, Ordering::Relaxed);
+    }
+
+    pub fn mem_charged(&self) -> usize {
+        self.mem_charged.load(Ordering::Relaxed)
     }
 
     pub fn exited(&self) -> Option<i32> {
@@ -77,11 +118,19 @@ impl Process {
         PROCESSES.lock().iter().find(|p| p.id == id).cloned()
     }
 
-    pub fn snapshot() -> Vec<(u32, String, u32)> {
+    /// (pid, name, main thread, quota-charged bytes) per live process.
+    pub fn snapshot() -> Vec<(u32, String, u32, usize)> {
         PROCESSES
             .lock()
             .iter()
-            .map(|p| (p.id, p.name.clone(), p.main_thread.load(Ordering::Relaxed)))
+            .map(|p| {
+                (
+                    p.id,
+                    p.name.clone(),
+                    p.main_thread.load(Ordering::Relaxed),
+                    p.mem_charged(),
+                )
+            })
             .collect()
     }
 }

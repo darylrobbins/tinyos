@@ -297,7 +297,7 @@ fn sys_memobj_create(size: u64) -> SysResult {
         return Err(ST_INVALID_ARGS);
     }
     let p = cur_proc()?;
-    let m = MemObj::create(size as usize).ok_or(ST_NO_MEMORY)?;
+    let m = MemObj::create_for(size as usize, &p)?;
     let hv = p.handles.lock().insert(Handle::new(Object::MemObj(m), RIGHTS_ALL))?;
     Ok(hv as u64)
 }

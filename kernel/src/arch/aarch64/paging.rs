@@ -166,6 +166,11 @@ impl AddrSpace {
         self.owned.push((pa, pages));
     }
 
+    /// Total bytes currently mapped (image, stack, memobjs).
+    pub fn mapped_bytes(&self) -> usize {
+        self.maps.iter().map(|m| m.len as usize).sum()
+    }
+
     /// Reserve a kernel-chosen VA range (page-aligned) for `len` bytes.
     pub fn alloc_va(&mut self, len: usize) -> u64 {
         let va = self.bump;

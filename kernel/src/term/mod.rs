@@ -364,8 +364,11 @@ impl Terminal {
                 let procs = crate::obj::process::Process::snapshot();
                 if !procs.is_empty() {
                     self.out("processes:".to_string(), DIM);
-                    for (pid, name, tid) in procs {
-                        self.out(format!("{pid:>4}  {name:<8} thread {tid}"), FG);
+                    for (pid, name, tid, mem) in procs {
+                        self.out(
+                            format!("{pid:>4}  {name:<8} thread {tid}  {} KiB", mem >> 10),
+                            FG,
+                        );
                     }
                 }
             }

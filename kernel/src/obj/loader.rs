@@ -214,6 +214,10 @@ pub fn spawn(name: String, elf: &[u8], argv: &[String]) -> Result<SpawnedApp, Lo
     let sp = stack_va + USER_STACK_SIZE as u64;
 
     let process = Process::new(name.clone(), aspace);
+    // Charge the image + stack against the process's memory quota (kernel-
+    // controlled sizes; no failure path needed — the quota gates future
+    // memobj_create calls).
+    process.charge(process.aspace.lock().mapped_bytes());
 
     // Channels: main (bootstrap), console, shell.
     let (main_app, main_kern) = channel::create();
