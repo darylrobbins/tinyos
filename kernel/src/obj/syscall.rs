@@ -8,11 +8,12 @@
 #![allow(dead_code)]
 
 use alloc::sync::Arc;
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use super::channel::{self, MAX_MSG_BYTES, MAX_MSG_HANDLES, Message};
 use super::handle::{
-    Handle, RIGHT_MAP, RIGHT_READ, RIGHT_TRANSFER, RIGHT_WAIT, RIGHT_WRITE, RIGHTS_ALL,
+    Handle, RIGHT_DUP, RIGHT_MAP, RIGHT_READ, RIGHT_TRANSFER, RIGHT_WAIT, RIGHT_WRITE, RIGHTS_ALL,
 };
 use super::memobj::MemObj;
 use super::process::Process;
@@ -28,7 +29,7 @@ pub use abi::syscall::{
     ST_TIMED_OUT, ST_WRONG_TYPE, SYS_ABI_VERSION, SYS_CHANNEL_CREATE, SYS_CHANNEL_RECV,
     SYS_CHANNEL_SEND, SYS_CLOCK_UPTIME, SYS_HANDLE_CLOSE, SYS_HANDLE_DUP, SYS_LOG,
     SYS_MEMOBJ_CREATE, SYS_MEMOBJ_MAP, SYS_MEMOBJ_SIZE, SYS_MEMOBJ_UNMAP, SYS_PROCESS_EXIT,
-    SYS_WAIT_MANY,
+    SYS_PROCESS_SPAWN, SYS_WAIT_MANY,
 };
 
 const LOG_MAX: u64 = 4096;
@@ -49,6 +50,9 @@ pub fn dispatch(sysno: u64, args: [u64; 6]) -> (u32, u64) {
         SYS_MEMOBJ_MAP => sys_memobj_map(args[0], args[1], args[2]),
         SYS_MEMOBJ_SIZE => sys_memobj_size(args[0]),
         SYS_MEMOBJ_UNMAP => sys_memobj_unmap(args[0]),
+        SYS_PROCESS_SPAWN => {
+            sys_process_spawn(args[0], args[1], args[2], args[3], args[4], args[5])
+        }
         SYS_PROCESS_EXIT => exit_current(args[0] as u32 as i32),
         SYS_CLOCK_UPTIME => Ok(crate::arch::timer::uptime_us()),
         SYS_ABI_VERSION => Ok(ABI_VERSION as u64),
@@ -343,6 +347,117 @@ fn sys_memobj_map(hv: u64, offset: u64, len: u64) -> SysResult {
     };
     p.mapped.lock().push(m);
     Ok(va)
+}
+
+fn sys_process_spawn(
+    elf_h: u64,
+    argv_ptr: u64,
+    argv_len: u64,
+    grants_ptr: u64,
+    grant_count: u64,
+    out_ptr: u64,
+) -> SysResult {
+    const MAX_ELF: usize = 16 * 1024 * 1024;
+    const MAX_ARGV: u64 = 4096;
+    const MAX_ARGS: u32 = 16;
+    const MAX_GRANTS: u64 = 4;
+    if argv_len > MAX_ARGV || grant_count > MAX_GRANTS {
+        return Err(ST_INVALID_ARGS);
+    }
+    let p = cur_proc()?;
+
+    // ELF image: snapshot out of the memobj (untrusted; the loader validates).
+    let elf: Vec<u8> = {
+        let t = p.handles.lock();
+        let h = t.get(elf_h as u32)?;
+        if h.rights & RIGHT_READ == 0 {
+            return Err(ST_ACCESS_DENIED);
+        }
+        let Object::MemObj(m) = &h.object else {
+            return Err(ST_WRONG_TYPE);
+        };
+        if m.size() > MAX_ELF {
+            return Err(ST_INVALID_ARGS);
+        }
+        unsafe { m.bytes()[..m.size()].to_vec() }
+    };
+
+    // argv record: u32 argc, then per arg u32 len + utf8.
+    let record = copy_in(argv_ptr, argv_len)?;
+    let u32at = |o: usize| -> Result<u32, u32> {
+        record
+            .get(o..o + 4)
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+            .ok_or(ST_INVALID_ARGS)
+    };
+    let argc = u32at(0)?;
+    if argc > MAX_ARGS {
+        return Err(ST_INVALID_ARGS);
+    }
+    let mut argv: Vec<String> = Vec::with_capacity(argc as usize);
+    let mut off = 4usize;
+    for _ in 0..argc {
+        let len = u32at(off)? as usize;
+        off += 4;
+        let bytes = record.get(off..off + len).ok_or(ST_INVALID_ARGS)?;
+        argv.push(
+            core::str::from_utf8(bytes)
+                .map_err(|_| ST_INVALID_ARGS)?
+                .into(),
+        );
+        off += len;
+    }
+
+    // Grants: (tag, handle) pairs; handles move out of the caller's table.
+    let graw = copy_in(grants_ptr, grant_count * 8)?;
+    let mut grants: Vec<(u32, Handle)> = Vec::new();
+    let mut taken: Vec<(u32, u32)> = Vec::new(); // (hv, tag) for rollback
+    {
+        let mut t = p.handles.lock();
+        for i in 0..grant_count as usize {
+            let tag = u32::from_le_bytes(graw[i * 8..i * 8 + 4].try_into().unwrap());
+            let hv = u32::from_le_bytes(graw[i * 8 + 4..i * 8 + 8].try_into().unwrap());
+            match t.take(hv) {
+                Ok(h) if h.rights & RIGHT_TRANSFER != 0 => {
+                    taken.push((hv, tag));
+                    grants.push((tag, h));
+                }
+                Ok(h) => {
+                    // No TRANSFER right: roll everything back.
+                    t.insert_back(hv, h);
+                    for ((hv2, _), (_, h2)) in taken.iter().zip(grants.drain(..)) {
+                        t.insert_back(*hv2, h2);
+                    }
+                    return Err(ST_ACCESS_DENIED);
+                }
+                Err(e) => {
+                    for ((hv2, _), (_, h2)) in taken.iter().zip(grants.drain(..)) {
+                        t.insert_back(*hv2, h2);
+                    }
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    let name = argv.first().cloned().unwrap_or_else(|| String::from("app"));
+    let (child, tid, main_peer) =
+        match crate::obj::loader::spawn_with_grants(name, &elf, &argv, grants) {
+            Ok(r) => r,
+            Err(_) => return Err(ST_INVALID_ARGS), // grants are consumed; load failed
+        };
+
+    let (ph, mh) = {
+        let mut t = p.handles.lock();
+        let ph = t.insert(Handle::new(
+            Object::Process(child),
+            RIGHT_WAIT | RIGHT_DUP | RIGHT_TRANSFER,
+        ))?;
+        let mh = t.insert(Handle::new(Object::Channel(main_peer), RIGHTS_ALL))?;
+        (ph, mh)
+    };
+    copy_out_u32s(out_ptr, &[ph, mh])?;
+    Ok(tid as u64)
 }
 
 fn sys_memobj_unmap(va: u64) -> SysResult {

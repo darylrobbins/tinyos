@@ -199,9 +199,16 @@ fn bootstrap_record(argv: &[String], tags: &[u32]) -> Vec<u8> {
     b
 }
 
-/// Load `elf`, spawn it as a user process named `name` with `argv`. Returns
-/// the kernel-side console/shell channel ends for the caller to pump.
-pub fn spawn(name: String, elf: &[u8], argv: &[String]) -> Result<SpawnedApp, LoadError> {
+/// Spawn `elf` as a process with explicit grants: (tag, handle) pairs
+/// delivered in the bootstrap record, capability-style. Returns the process,
+/// its main thread id, and the parent-side end of the app's main channel
+/// (dropping it flips the app's handle 1 to PEER_CLOSED).
+pub fn spawn_with_grants(
+    name: String,
+    elf: &[u8],
+    argv: &[String],
+    grants: Vec<(u32, Handle)>,
+) -> Result<(Arc<Process>, u32, Arc<ChannelEnd>), LoadError> {
     let mut aspace = AddrSpace::new().ok_or(LoadError::WrongArch)?;
     let entry = load_image(elf, &mut aspace, ABI_VERSION as u32)?;
 
@@ -219,31 +226,21 @@ pub fn spawn(name: String, elf: &[u8], argv: &[String]) -> Result<SpawnedApp, Lo
     // memobj_create calls).
     process.charge(process.aspace.lock().mapped_bytes());
 
-    // Channels: main (bootstrap), console, shell.
-    let (main_app, main_kern) = channel::create();
-    let (console_app, console_kern) = channel::create();
-    let (shell_app, shell_kern) = channel::create();
-
     // Handle 1 = app's end of the main channel (installed first).
+    let (main_app, main_kern) = channel::create();
     {
         let mut t = process.handles.lock();
         t.insert(Handle::new(Object::Channel(main_app), RIGHTS_ALL))
             .map_err(|_| LoadError::NoMemory)?;
     }
 
-    // Bootstrap message: record bytes + the console/shell app-ends as handles.
-    let record = bootstrap_record(argv, &[TAG_CONSOLE, TAG_SHELL]);
-    let handles = alloc::vec![
-        Handle::new(Object::Channel(console_app), RIGHTS_ALL),
-        Handle::new(Object::Channel(shell_app), RIGHTS_ALL),
-    ];
+    // Bootstrap message: record bytes + the granted handles riding along.
+    let tags: Vec<u32> = grants.iter().map(|(t, _)| *t).collect();
+    let record = bootstrap_record(argv, &tags);
+    let handles: Vec<Handle> = grants.into_iter().map(|(_, h)| h).collect();
     main_kern
         .send(Message { bytes: record, handles })
         .map_err(|_| LoadError::NoMemory)?;
-    // Park the kernel's bootstrap end in the process so it lives as long as
-    // the app does — dropping it would flip the app's main channel to
-    // PEER_CLOSED. The kernel never sends on it again.
-    process.keep.lock().push(main_kern);
 
     let aspace_arc = process.aspace.clone();
     let thread_id = crate::sched::spawn_user(
@@ -260,5 +257,26 @@ pub fn spawn(name: String, elf: &[u8], argv: &[String]) -> Result<SpawnedApp, Lo
         .main_thread
         .store(thread_id, core::sync::atomic::Ordering::Relaxed);
 
+    Ok((process, thread_id, main_kern))
+}
+
+/// Load `elf`, spawn it as a user process named `name` with `argv`, granting
+/// a console and shell channel. Returns the kernel-side ends to pump.
+pub fn spawn(name: String, elf: &[u8], argv: &[String]) -> Result<SpawnedApp, LoadError> {
+    let (console_app, console_kern) = channel::create();
+    let (shell_app, shell_kern) = channel::create();
+    let (process, thread_id, main_kern) = spawn_with_grants(
+        name,
+        elf,
+        argv,
+        alloc::vec![
+            (TAG_CONSOLE, Handle::new(Object::Channel(console_app), RIGHTS_ALL)),
+            (TAG_SHELL, Handle::new(Object::Channel(shell_app), RIGHTS_ALL)),
+        ],
+    )?;
+    // Park the kernel's bootstrap end in the process so it lives as long as
+    // the app does — dropping it would flip the app's main channel to
+    // PEER_CLOSED. The kernel never sends on it again.
+    process.keep.lock().push(main_kern);
     Ok(SpawnedApp { process, thread_id, console: console_kern, shell: shell_kern })
 }
