@@ -592,18 +592,9 @@ impl Shell {
         }
     }
 
-    /// Drain `edit <file>` requests queued by any Terminal window and open an
-    /// editor window for each. Called once per frame from the main loop.
+    /// Per-frame servicing of launcher-spawned SDK apps (svc jobs).
     pub fn pump_app_requests(&mut self) {
         self.svc_jobs.retain_mut(|j| !j.pump());
-        for win in &mut self.windows {
-            if let Some(t) = win
-                .app
-                .as_any()
-                .downcast_mut::<crate::apps::terminal::TerminalApp>()
-            {
-            }
-        }
     }
 
     /// Per-frame stats feed for any open monitor window.

@@ -39,6 +39,10 @@ pub struct Terminal {
     bg_jobs: Vec<RunningApp>,
     /// Visible rows in cells (from the hosting card), for OP_RESIZE.
     rows: usize,
+    /// True when the foreground app is the userspace shell `/apps/sh` (the
+    /// default). It is re-launched when it exits. False = in-kernel fallback
+    /// interpreter (sh unavailable, e.g. diskless boot or non-aarch64).
+    shell_session: bool,
 }
 
 struct RunningApp {
@@ -117,9 +121,17 @@ impl Terminal {
             running: None,
             bg_jobs: Vec::new(),
             rows: 24,
+            shell_session: false,
         };
-        t.refresh_prompt();
-        t.out(format!("tinyOS {VERSION} - type 'help' to get started"), DIM);
+        // Default: run the userspace shell. Fall back to the in-kernel
+        // command interpreter only if it can't be launched.
+        if !t.launch_shell() {
+            t.refresh_prompt();
+            t.out(
+                format!("tinyOS {VERSION} - userspace shell unavailable, using builtin"),
+                DIM,
+            );
+        }
         t
     }
 
@@ -589,6 +601,22 @@ impl Terminal {
 
     /// Load and run an app from /apps/<name> with argv. A trailing `&`
     /// runs it in the background (output prefixed, input stays here).
+    /// Launch `/apps/sh` as the terminal's shell. On success it becomes the
+    /// foreground app that owns the console; on failure the caller falls back
+    /// to the in-kernel command interpreter. aarch64 only.
+    fn launch_shell(&mut self) -> bool {
+        #[cfg(target_arch = "aarch64")]
+        {
+            if self.spawn_app("sh", &[], false).is_ok() {
+                self.shell_session = true;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// The in-kernel `run` builtin (fallback shell only). Spawns an app from
+    /// /apps, foreground unless a trailing `&`.
     fn run_app(&mut self, args: &str) {
         let (args, background) = match args.trim().strip_suffix('&') {
             Some(rest) => (rest.trim(), true),
@@ -608,65 +636,60 @@ impl Terminal {
         {
             let _ = (name, argv);
             self.out("run: userspace unsupported on this arch".to_string(), ERR);
-            return;
         }
         #[cfg(target_arch = "aarch64")]
-        {
-            let path = format!("/apps/{name}");
-            let elf = match crate::fs::read("/", &path) {
-                Ok(elf) => elf,
-                Err(e) => {
-                    self.out(format!("run: {name}: {e}"), ERR);
-                    return;
-                }
-            };
-            match crate::obj::loader::spawn(
-                name.to_string(),
-                &elf,
-                &argv,
-                &crate::obj::loader::GrantSet::all(),
-            ) {
-                Ok(app) => {
-                    self.out(format!("run: started {name} (thread {})", app.thread_id), DIM);
-                    // Hand the window channel to the shell: if the app opens a
-                    // window, the shell hosts it. Console output stays here.
-                    crate::ui::shell::extern_app::register(app.shell, name.to_string());
-                    let job = RunningApp {
-                        name: name.to_string(),
-                        // Developer mode: `run` is an explicit user action, so
-                        // the app sees the whole filesystem (jail "/"), with
-                        // relative paths against the terminal's cwd.
-                        fs_srv: crate::fs::service::FsService::new(
-                            app.fs,
-                            String::from("/"),
-                            self.cwd.clone(),
-                        ),
-                        // User-launched via `run`: the user's explicit action is the
-                        // authorization for kill.
-                        proc_srv: crate::obj::procsrv::ProcService::new(app.proc, true),
-                        process: app.process,
-                        thread_id: app.thread_id,
-                        console: app.console,
-                        partial: String::new(),
-                        partial_color: FG,
-                        prompt_spans: Vec::new(),
-                        input_mode: abi::console::INPUT_MODE_LINES,
-                        sent_size: (0, 0), // forces the initial OP_RESIZE
-                        surface: None,
-                        live: None,
-                    };
-                    if background {
-                        self.bg_jobs.push(job);
-                    } else {
-                        self.running = Some(job);
-                        // The shell prompt makes way for the app's own
-                        // output; restored when the app exits.
-                        self.view.set_prompt(Vec::new());
-                    }
-                }
-                Err(e) => self.out(format!("run: {name}: {}", e.msg()), ERR),
-            }
+        match self.spawn_app(name, &argv, background) {
+            Ok(tid) => self.out(format!("run: started {name} (thread {tid})"), DIM),
+            Err(e) => self.out(format!("run: {name}: {e}"), ERR),
         }
+    }
+
+    /// Spawn `/apps/<name>` with argv, wiring its console/fs/proc services
+    /// and window channel. Foreground apps take over the console; background
+    /// ones join `bg_jobs`. Returns the thread id.
+    #[cfg(target_arch = "aarch64")]
+    fn spawn_app(&mut self, name: &str, argv: &[String], background: bool) -> Result<u32, String> {
+        let elf = crate::fs::read("/", &format!("/apps/{name}")).map_err(|e| format!("{e}"))?;
+        // Developer mode: launching from the terminal is an explicit user
+        // action, so the app gets every bootstrap channel and sees the whole
+        // filesystem (jail "/"), with relative paths against the cwd.
+        let app = crate::obj::loader::spawn(
+            name.to_string(),
+            &elf,
+            argv,
+            &crate::obj::loader::GrantSet::all(),
+        )
+        .map_err(|e| e.msg())?;
+        let tid = app.thread_id;
+        // Hand the window channel to the compositor: if the app (or a child
+        // it forwards the channel to) opens a window, the shell hosts it.
+        crate::ui::shell::extern_app::register(app.shell, name.to_string());
+        let job = RunningApp {
+            name: name.to_string(),
+            fs_srv: crate::fs::service::FsService::new(
+                app.fs,
+                String::from("/"),
+                self.cwd.clone(),
+            ),
+            proc_srv: crate::obj::procsrv::ProcService::new(app.proc, true),
+            process: app.process,
+            thread_id: tid,
+            console: app.console,
+            partial: String::new(),
+            partial_color: FG,
+            prompt_spans: Vec::new(),
+            input_mode: abi::console::INPUT_MODE_LINES,
+            sent_size: (0, 0), // forces the initial OP_RESIZE
+            surface: None,
+            live: None,
+        };
+        if background {
+            self.bg_jobs.push(job);
+        } else {
+            self.running = Some(job);
+            self.view.set_prompt(Vec::new()); // the app owns the prompt now
+        }
+        Ok(tid)
     }
 
     /// Drain background jobs: WRITE lines land in scrollback prefixed with
@@ -959,8 +982,17 @@ impl Terminal {
             if !app.partial.is_empty() {
                 self.out(app.partial, FG);
             }
-            self.out(format!("[{}] exited (code {code})", app.thread_id), DIM);
-            self.refresh_prompt();
+            if self.shell_session {
+                // The shell itself exited (`exit`) — a terminal always wants
+                // one, so relaunch. If that now fails, drop to the builtin.
+                if !self.launch_shell() {
+                    self.shell_session = false;
+                    self.refresh_prompt();
+                }
+            } else {
+                self.out(format!("[{}] exited (code {code})", app.thread_id), DIM);
+                self.refresh_prompt();
+            }
         }
     }
 
