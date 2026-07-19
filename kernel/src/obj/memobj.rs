@@ -55,6 +55,14 @@ impl MemObj {
         self.size
     }
 
+    /// Physical base address (identity-mapped, so kernel-addressable).
+    ///
+    /// TRUST INVARIANT (audited 2026-07-19): every kernel read of app-shared
+    /// memory (compositor blits, terminal cell snapshots) must derive its
+    /// address from this method on the object a *handle* referenced — never
+    /// from an address or size claimed in message bytes — and must bound
+    /// reads by `size()`. Current consumers: ui/shell/extern_app.rs (pixel
+    /// surfaces), term/mod.rs AppSurface::snap (cell surfaces).
     pub fn pa(&self) -> usize {
         self.base_pa
     }
