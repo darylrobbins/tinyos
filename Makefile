@@ -82,8 +82,9 @@ mkfs:
 $(DISK): | mkfs apps
 	$(MKFS) create $(DISK) --size $(DISK_SIZE) $(if $(wildcard $(STAGE)/*),--populate $(STAGE),)
 
-# Update /apps inside an existing disk.img without recreating it (VM off).
-sync-apps: mkfs apps
+# Update /apps inside disk.img without recreating it (VM off). Creates the
+# disk first if it doesn't exist yet (fresh checkout/worktree).
+sync-apps: mkfs apps | $(DISK)
 	$(foreach a,$(APP_BINS),$(MKFS) put $(DISK) $(STAGE)/apps/$(a) /apps/$(a);)
 
 test:

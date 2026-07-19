@@ -17,7 +17,6 @@ use tinyos_app::{app, entry, proc, ConsoleEvent, Env};
 
 const ACC: u32 = abi::tokens::ACC;
 const TX2: u32 = abi::tokens::TX2;
-const RED: u32 = abi::tokens::HUE_RED;
 
 fn state_str(s: u32) -> &'static str {
     match s {

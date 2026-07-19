@@ -14,7 +14,7 @@ pub(crate) fn set_client(ch: Channel) {
 }
 
 fn client() -> Option<Channel> {
-    unsafe { (*core::ptr::addr_of!(PROC)) }
+    unsafe { *core::ptr::addr_of!(PROC) }
 }
 
 fn le_u32(b: &[u8], o: usize) -> Option<u32> {

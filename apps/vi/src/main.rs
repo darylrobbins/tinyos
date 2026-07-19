@@ -8,7 +8,7 @@
 extern crate alloc;
 
 use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 
 use abi::console::{CURSOR_BAR, CURSOR_BLOCK, INPUT_MODE_KEYS};
 use abi::fs::FS_NOT_FOUND;
