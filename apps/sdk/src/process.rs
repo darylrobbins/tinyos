@@ -63,6 +63,19 @@ impl Child {
     pub fn wait(self) {
         let mut it = [WaitItem { handle: self.proc_h, want: SIG_EXITED, observed: 0 }];
         let _ = wait_many(&mut it, u64::MAX);
+        self.release();
+    }
+
+    /// Non-blocking: true if the child has exited (for background jobs).
+    pub fn exited(&self) -> bool {
+        let mut it = [WaitItem { handle: self.proc_h, want: SIG_EXITED, observed: 0 }];
+        // Deadline 0 = poll: wait_many checks signals then times out.
+        let _ = wait_many(&mut it, 0);
+        it[0].observed & SIG_EXITED != 0
+    }
+
+    /// Release the process and main-channel handles.
+    pub fn release(&self) {
         syscall1(SYS_HANDLE_CLOSE, self.proc_h as u64);
         syscall1(SYS_HANDLE_CLOSE, self.main_h as u64);
     }
