@@ -54,6 +54,14 @@ impl PciDevice {
         self.write16(0x04, cmd | 0x6);
     }
 
+    /// Mask legacy INTx (command bit 10). A polled device must not leave a
+    /// level-triggered line asserted: nobody reads its ISR to deassert, and
+    /// the shared PCI IRQ would storm as soon as interrupts are enabled.
+    pub fn disable_intx(&self) {
+        let cmd = self.read16(0x04);
+        self.write16(0x04, cmd | (1 << 10));
+    }
+
     /// Physical address of a memory BAR, assigning one if the firmware
     /// left it unprogrammed. Returns None for an I/O or absent BAR.
     pub fn bar_addr(&self, bar: usize, alloc: &mut BarAllocator) -> Option<u64> {

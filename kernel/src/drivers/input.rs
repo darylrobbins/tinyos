@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use super::pci::{self, BarAllocator};
 use super::virtio::VirtioDevice;
 
-const VIRTIO_ID_INPUT: u16 = 0x1052;
+pub const VIRTIO_ID_INPUT: u16 = 0x1052;
 
 // evdev event types
 const EV_SYN: u16 = 0;
@@ -34,38 +34,30 @@ pub struct Input {
 }
 
 impl Input {
-    /// Claim every virtio-input device on the bus (keyboard, tablet).
-    pub fn init() -> Self {
-        let mut alloc = BarAllocator::new();
-        let mut devices = Vec::new();
-        for dev in pci::scan() {
-            kprintln!(
-                "tinyos: pci {:02x}:{:02x}.0 {:04x}:{:04x}",
-                dev.bdf >> 8,
-                (dev.bdf >> 3) & 0x1f,
-                dev.vendor,
-                dev.device
-            );
-            if dev.vendor == pci::VENDOR_VIRTIO && dev.device == VIRTIO_ID_INPUT {
-                match VirtioDevice::init(&dev, &mut alloc, 8) {
-                    Some(v) => {
-                        kprintln!("tinyos: virtio-input ready (bdf {:#x})", dev.bdf);
-                        // Register the ISR byte so the IRQ handler can
-                        // deassert level-triggered INTx.
-                        let slot = &crate::arch::irq::INPUT_ISR_ADDRS[devices.len()];
-                        slot.store(v.isr_addr(), core::sync::atomic::Ordering::Relaxed);
-                        #[cfg(target_arch = "x86_64")]
-                        crate::arch::irq::register_input_gsi(
-                            devices.len(),
-                            dev.interrupt_line() as u32,
-                        );
-                        devices.push(v);
-                    }
-                    None => kprintln!("tinyos: virtio-input init FAILED (bdf {:#x})", dev.bdf),
-                }
-            }
+    pub fn new() -> Self {
+        Self {
+            devices: Vec::new(),
         }
-        Self { devices }
+    }
+
+    /// Claim one virtio-input device (called from `drivers::probe`).
+    pub fn claim(&mut self, dev: &pci::PciDevice, alloc: &mut BarAllocator) {
+        match VirtioDevice::init(dev, alloc, 8) {
+            Some(v) => {
+                kprintln!("tinyos: virtio-input ready (bdf {:#x})", dev.bdf);
+                // Register the ISR byte so the IRQ handler can
+                // deassert level-triggered INTx.
+                let slot = &crate::arch::irq::INPUT_ISR_ADDRS[self.devices.len()];
+                slot.store(v.isr_addr(), core::sync::atomic::Ordering::Relaxed);
+                #[cfg(target_arch = "x86_64")]
+                crate::arch::irq::register_input_gsi(
+                    self.devices.len(),
+                    dev.interrupt_line() as u32,
+                );
+                self.devices.push(v);
+            }
+            None => kprintln!("tinyos: virtio-input init FAILED (bdf {:#x})", dev.bdf),
+        }
     }
 
     /// Drain all pending events from every input device.
