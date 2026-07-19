@@ -2,6 +2,8 @@
 
 Date: 2026-07-19
 Status: approved direction; milestones M1–M4 below
+Companion spec: `2026-07-19-roadmap.md` (overall phases; "Phase N"
+references below point there)
 
 ## Goal
 
