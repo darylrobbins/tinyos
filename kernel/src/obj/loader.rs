@@ -56,8 +56,8 @@ fn u64at(b: &[u8], o: usize) -> Option<u64> {
 }
 
 /// File bytes of the lowest PT_LOAD segment (where link.ld places the
-/// `.tinyos_abi` stamp: u32 abi_version, then optionally u32 caps_len +
-/// caps bytes emitted by the SDK's `declare_caps!`).
+/// `.tinyos_abi` stamp: u32 abi_version, then optionally u32 CAPS_MAGIC +
+/// u32 caps_len + caps bytes emitted by the SDK's `declare_caps!`).
 fn abi_blob(elf: &[u8]) -> Option<&[u8]> {
     let phoff = u64at(elf, 32)? as usize;
     let phentsize = u16at(elf, 54)? as usize;
@@ -107,14 +107,20 @@ pub fn manifest(elf: &[u8]) -> Manifest {
     let Some(blob) = abi_blob(elf) else {
         return Manifest::legacy();
     };
-    let caps = u32at(blob, 4)
-        .map(|l| l as usize)
-        .filter(|&l| l > 0 && l <= MAX_CAPS_LEN)
-        .and_then(|l| blob.get(8..8 + l))
-        .and_then(|b| core::str::from_utf8(b).ok());
-    let Some(caps) = caps else {
+    // The CAPS magic marks an explicit declaration; without it (legacy
+    // binaries: the stamp is followed by zero padding) apply the
+    // compatibility default. With it, parse exactly what's declared —
+    // `declare_caps!(b"")` means "no capabilities", and a malformed blob
+    // fails closed to that same empty grant set, never to legacy.
+    if u32at(blob, 4) != Some(abi::bootstrap::CAPS_MAGIC) {
         return Manifest::legacy();
-    };
+    }
+    let caps = u32at(blob, 8)
+        .map(|l| l as usize)
+        .filter(|&l| l <= MAX_CAPS_LEN)
+        .and_then(|l| blob.get(12..12 + l))
+        .and_then(|b| core::str::from_utf8(b).ok())
+        .unwrap_or("");
     // Declared caps → default-deny: only what's listed.
     let mut m = Manifest { console: false, window: false, proc: false, proc_kill: false, fs: Vec::new() };
     for tok in caps.lines().map(str::trim).filter(|t| !t.is_empty()) {
