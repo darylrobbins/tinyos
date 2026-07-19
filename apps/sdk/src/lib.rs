@@ -33,6 +33,9 @@ pub mod window;
 pub use console::{read_line, ConsoleEvent, LiveRegion, TextSurface};
 pub use entry::Env;
 
+/// Re-export for macros (`declare_caps!` references abi constants).
+pub use abi;
+
 /// ABI version stamp placed in the `.tinyos_abi` section; the loader checks
 /// it before running the app. `declare_caps!` appends a caps blob right
 /// after it (section `.tinyos_abi.caps`, ordered by link.ld).
@@ -40,10 +43,13 @@ pub use entry::Env;
 #[link_section = ".tinyos_abi"]
 static ABI_VERSION: u32 = syscall::ABI_VERSION;
 
-/// Backing for `declare_caps!`: u32 len + token bytes, placed immediately
-/// after the ABI stamp so the loader reads it at image base + 4.
+/// Backing for `declare_caps!`: magic + u32 len + token bytes, placed
+/// immediately after the ABI stamp so the loader reads it at image base + 4.
+/// The magic marks an explicit declaration; without it the loader cannot
+/// tell an empty caps list from a legacy binary's zero padding.
 #[repr(C)]
 pub struct CapsBlob<const N: usize> {
+    pub magic: u32,
     pub len: u32,
     pub bytes: [u8; N],
 }
@@ -51,7 +57,8 @@ pub struct CapsBlob<const N: usize> {
 /// Declare the capabilities this app needs, newline-separated:
 /// `console`, `window`, `proc`, `proc.kill` (advisory), `fs:self`
 /// (a private data dir), `fs:/shared/<dir>`. Spawners intersect these with
-/// their own policy; apps that declare nothing get the legacy default.
+/// their own policy. Declaring `b""` means "no capabilities at all";
+/// apps that don't invoke the macro get the legacy default grants.
 ///
 /// ```ignore
 /// tinyos_app::declare_caps!(b"console\nwindow\nfs:self");
@@ -61,8 +68,11 @@ macro_rules! declare_caps {
     ($caps:expr) => {
         #[used]
         #[link_section = ".tinyos_abi.caps"]
-        static TINYOS_CAPS: $crate::CapsBlob<{ $caps.len() }> =
-            $crate::CapsBlob { len: $caps.len() as u32, bytes: *$caps };
+        static TINYOS_CAPS: $crate::CapsBlob<{ $caps.len() }> = $crate::CapsBlob {
+            magic: $crate::abi::bootstrap::CAPS_MAGIC,
+            len: $caps.len() as u32,
+            bytes: *$caps,
+        };
     };
 }
 

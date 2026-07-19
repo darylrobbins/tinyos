@@ -62,18 +62,28 @@ fn simple(ch: Channel, req: &[u8]) -> Result<(), u32> {
 
 /// A capability to a directory subtree: its own FS channel, confined by the
 /// service to the opened directory. Obtained via `open_dir` (from the app's
-/// root grant) or `Dir::open_dir` (narrowing further). The raw channel
-/// handle (`Dir::handle`) can ride a `process_spawn` grant to delegate the
-/// subtree to a child process. Dropping the Dir closes the channel, which
+/// root grant) or `Dir::open_dir` (narrowing further). To delegate the
+/// subtree to a child process, `into_handle` yields the raw channel handle
+/// for a `process_spawn` grant. Dropping the Dir closes the channel, which
 /// revokes nothing for the parent but ends this capability.
 pub struct Dir {
     ch: Channel,
 }
 
 impl Dir {
-    /// The channel handle (e.g. to pass as a TAG_FS spawn grant).
+    /// The raw channel handle, for inspection only — the Dir still owns it
+    /// and will close it on drop. To give the handle away, use
+    /// [`Dir::into_handle`].
     pub fn handle(&self) -> u32 {
         self.ch.0
+    }
+
+    /// Consume the Dir and yield its channel handle without closing it —
+    /// for handing the capability away, e.g. as a TAG_FS `process_spawn`
+    /// grant (which moves the handle out of this process's table; a later
+    /// close of the stale value could hit an unrelated reused slot).
+    pub fn into_handle(self) -> u32 {
+        core::mem::ManuallyDrop::new(self).ch.0
     }
 
     /// Narrow further: a Dir confined to `path` within this Dir.
