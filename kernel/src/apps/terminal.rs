@@ -14,10 +14,6 @@ impl TerminalApp {
         }
     }
 
-    /// A pending `edit <file>` request, drained by the shell each frame.
-    pub fn take_pending_edit(&mut self) -> Option<(alloc::string::String, alloc::string::String)> {
-        self.term.take_pending_edit()
-    }
 
 }
 

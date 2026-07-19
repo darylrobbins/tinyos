@@ -23,6 +23,7 @@ pub mod proc;
 mod font8x8;
 pub mod gfx;
 pub mod syscall;
+pub mod textpad;
 pub mod ui;
 pub mod uifont;
 pub mod wait;

@@ -1,27 +1,38 @@
+//! A small editable multi-line text widget over a pixel Canvas (8x8 font at
+//! 2x). Ported from the kernel Notes editing logic during the Phase 4
+//! eviction; used by the windowed editor app.
+
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::drivers::input::keys;
-use crate::gfx::font::Fonts;
-use crate::gfx::surface::Surface;
-use crate::ui::shell::app::{App, Rect};
-use crate::ui::shell::tokens::{ACCENT, TEXT};
+use abi::keys;
 
-const LINE_H: i32 = 22;
+use crate::gfx::{self, Canvas, Rect};
 
-pub struct NotesApp {
+const SCALE: i32 = 2;
+pub const CELL_W: i32 = 8 * SCALE;
+pub const LINE_H: i32 = 8 * SCALE + 4;
+
+pub struct TextPad {
     lines: Vec<String>,
     line: usize,
     col: usize,
+    pub dirty: bool,
 }
 
-impl NotesApp {
-    pub fn new() -> Self {
-        Self {
-            lines: alloc::vec![String::new()],
-            line: 0,
-            col: 0,
+impl TextPad {
+    pub fn new(text: &str) -> Self {
+        let mut lines: Vec<String> = text.lines().map(String::from).collect();
+        if lines.is_empty() {
+            lines.push(String::new());
         }
+        Self { lines, line: 0, col: 0, dirty: false }
+    }
+
+    pub fn text(&self) -> String {
+        let mut out = self.lines.join("\n");
+        out.push('\n');
+        out
     }
 
     fn byte_col(&self) -> usize {
@@ -35,41 +46,9 @@ impl NotesApp {
     fn clamp_col(&mut self) {
         self.col = self.col.min(self.lines[self.line].chars().count());
     }
-}
 
-impl App for NotesApp {
-    fn as_any(&mut self) -> &mut dyn core::any::Any {
-        self
-    }
-
-    fn title(&self) -> &str {
-        "Notes"
-    }
-
-    fn glyph(&self) -> &str {
-        "N"
-    }
-
-    fn preferred_size(&self, _sw: i32, _sh: i32) -> (i32, i32) {
-        (420, 320)
-    }
-
-    fn draw(&mut self, s: &mut Surface, fonts: &mut Fonts, body: Rect, focused: bool, now: u64) {
-        let visible = (body.h / LINE_H).max(1) as usize;
-        let start = (self.line + 1).saturating_sub(visible);
-        for (i, line) in self.lines.iter().skip(start).take(visible).enumerate() {
-            fonts
-                .mono
-                .draw(s, line, 15.0, body.x, body.y + i as i32 * LINE_H, TEXT);
-        }
-        if focused && crate::ui::shell::caret_on(now) {
-            let row = (self.line - start) as i32;
-            let cx = body.x + self.col as i32 * 9;
-            s.fill_rect(cx, body.y + row * LINE_H, 2, LINE_H - 4, ACCENT);
-        }
-    }
-
-    fn on_char(&mut self, c: char) {
+    pub fn on_char(&mut self, c: char) {
+        self.dirty = true;
         if c == '\n' {
             let bc = self.byte_col();
             let rest = self.lines[self.line].split_off(bc);
@@ -83,9 +62,10 @@ impl App for NotesApp {
         }
     }
 
-    fn on_key(&mut self, code: u16) {
+    pub fn on_key(&mut self, code: u16) {
         match code {
             keys::BACKSPACE => {
+                self.dirty = true;
                 if self.col > 0 {
                     self.col -= 1;
                     let bc = self.byte_col();
@@ -98,7 +78,9 @@ impl App for NotesApp {
                 }
             }
             keys::LEFT => self.col = self.col.saturating_sub(1),
-            keys::RIGHT => self.col = (self.col + 1).min(self.lines[self.line].chars().count()),
+            keys::RIGHT => {
+                self.col = (self.col + 1).min(self.lines[self.line].chars().count())
+            }
             keys::UP => {
                 self.line = self.line.saturating_sub(1);
                 self.clamp_col();
@@ -108,6 +90,20 @@ impl App for NotesApp {
                 self.clamp_col();
             }
             _ => {}
+        }
+    }
+
+    /// Draw into `area`; the caret is shown when `blink_on`.
+    pub fn render(&self, c: &mut Canvas, area: Rect, blink_on: bool) {
+        let visible = (area.h / LINE_H).max(1) as usize;
+        let start = (self.line + 1).saturating_sub(visible);
+        for (i, line) in self.lines.iter().skip(start).take(visible).enumerate() {
+            c.draw_text(area.x, area.y + i as i32 * LINE_H, line, SCALE, gfx::TX);
+        }
+        if blink_on {
+            let row = (self.line - start) as i32;
+            let cx = area.x + self.col as i32 * CELL_W;
+            c.fill_rect(Rect::new(cx, area.y + row * LINE_H, 2, LINE_H - 3), gfx::ACC);
         }
     }
 }

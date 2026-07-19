@@ -500,7 +500,7 @@ impl Shell {
         }
         match name {
             "terminal" => self.open(Box::new(crate::apps::terminal::TerminalApp::new())),
-            "notes" => self.open(Box::new(crate::apps::notes::NotesApp::new())),
+            "notes" => self.launch_app("edit", &[alloc::string::String::from("/notes.txt")]),
             "monitor" => self.open(Box::new(crate::apps::monitor::MonitorApp::new())),
             // SDK apps, spawned from /apps (Phase 4: the launcher speaks
             // the same protocols as the terminal's `run`).
@@ -596,20 +596,13 @@ impl Shell {
     /// editor window for each. Called once per frame from the main loop.
     pub fn pump_app_requests(&mut self) {
         self.svc_jobs.retain_mut(|j| !j.pump());
-        let mut edits = alloc::vec::Vec::new();
         for win in &mut self.windows {
             if let Some(t) = win
                 .app
                 .as_any()
                 .downcast_mut::<crate::apps::terminal::TerminalApp>()
             {
-                if let Some(r) = t.take_pending_edit() {
-                    edits.push(r);
-                }
             }
-        }
-        for (cwd, path) in edits {
-            self.open(Box::new(crate::apps::editor::EditorApp::open(cwd, path)));
         }
     }
 

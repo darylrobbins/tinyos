@@ -11,6 +11,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "edit"
+version = "0.1.0"
+dependencies = [
+ "tinyos-abi",
+ "tinyos-app",
+]
+
+[[package]]
 name = "greet"
 version = "0.1.0"
 dependencies = [

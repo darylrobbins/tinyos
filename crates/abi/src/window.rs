@@ -14,3 +14,4 @@ pub const OP_KEY: u32 = 17; // {code:u16, down:u8}
 pub const OP_CLOSE_REQ: u32 = 18;
 pub const OP_POINTER: u32 = 19; // {x:i32, y:i32} body-local
 pub const OP_BUTTON: u32 = 20; // {down:u8, x:i32, y:i32}
+pub const OP_CTRL: u32 = 21; // {code:u32} key pressed with Ctrl held

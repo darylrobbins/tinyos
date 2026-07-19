@@ -9,13 +9,15 @@ use crate::syscall::*;
 use crate::wait::{WaitItem, wait_many};
 
 use abi::window::{
-    OP_BUTTON, OP_CHAR, OP_CLOSE_REQ, OP_KEY, OP_OPEN, OP_OPENED, OP_POINTER, OP_PRESENT,
+    OP_BUTTON, OP_CHAR, OP_CLOSE_REQ, OP_CTRL, OP_KEY, OP_OPEN, OP_OPENED, OP_POINTER, OP_PRESENT,
 };
 
 /// An input event delivered by the shell.
 pub enum Event {
     Char(char),
     Key { code: u16, down: bool },
+    /// A key pressed while Ctrl was held.
+    Ctrl(u16),
     /// Pointer moved; window-body-local coords (may fall outside the body
     /// while the left button is held mid-drag).
     PointerMoved { x: i32, y: i32 },
@@ -106,6 +108,10 @@ impl Window {
                 OP_KEY if m.bytes.len() >= 7 => {
                     let code = u16::from_le_bytes(m.bytes[4..6].try_into().unwrap());
                     out.push(Event::Key { code, down: m.bytes[6] != 0 });
+                }
+                OP_CTRL if m.bytes.len() >= 8 => {
+                    let code = u32::from_le_bytes(m.bytes[4..8].try_into().unwrap());
+                    out.push(Event::Ctrl(code as u16));
                 }
                 OP_POINTER if m.bytes.len() >= 12 => {
                     let x = i32::from_le_bytes(m.bytes[4..8].try_into().unwrap());

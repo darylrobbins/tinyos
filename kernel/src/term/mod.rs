@@ -37,9 +37,6 @@ pub struct Terminal {
     /// Background apps (`run <name> &`): output interleaves into scrollback
     /// prefixed with the app name; input stays with the shell/foreground.
     bg_jobs: Vec<RunningApp>,
-    /// An `edit <file>` request for the shell to open an editor window,
-    /// as (cwd, path). Drained each frame by `Shell::pump_app_requests`.
-    pending_edit: Option<(String, String)>,
     /// Visible rows in cells (from the hosting card), for OP_RESIZE.
     rows: usize,
 }
@@ -114,7 +111,6 @@ impl Terminal {
             cwd: "/".to_string(),
             running: None,
             bg_jobs: Vec::new(),
-            pending_edit: None,
             rows: 24,
         };
         t.refresh_prompt();
@@ -128,10 +124,6 @@ impl Terminal {
         self.rows = rows;
     }
 
-    /// Take a pending `edit <file>` request, if any (shell drains this).
-    pub fn take_pending_edit(&mut self) -> Option<(String, String)> {
-        self.pending_edit.take()
-    }
 
 
     /// Prompt path segment, spaces included (" / ", " /notes ").
@@ -412,12 +404,14 @@ impl Terminal {
                 },
                 Err(e) => self.out(format!("cat: {e}"), ERR),
             },
+            // edit is a userspace windowed app now (Phase 4 eviction);
+            // spawn it as a background job so the shell stays usable.
             "edit" => {
                 let p = rest.trim();
                 if p.is_empty() {
                     self.out("usage: edit <file>".to_string(), ERR);
                 } else {
-                    self.pending_edit = Some((self.cwd.clone(), p.to_string()));
+                    self.run_app(&format!("edit {p} &"));
                 }
             }
             // vi is a userspace terminal app now (Phase 4 eviction).

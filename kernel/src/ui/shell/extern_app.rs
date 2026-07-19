@@ -24,7 +24,7 @@ use crate::obj::Object;
 
 // Window protocol opcodes — mirror apps/sdk/src/window.rs.
 use abi::window::{
-    OP_BUTTON, OP_CHAR, OP_CLOSE_REQ, OP_KEY, OP_OPEN, OP_OPENED, OP_POINTER, OP_PRESENT,
+    OP_BUTTON, OP_CHAR, OP_CLOSE_REQ, OP_CTRL, OP_KEY, OP_OPEN, OP_OPENED, OP_POINTER, OP_PRESENT,
 };
 
 /// A spawned userspace process that may open a window. Handed from the
@@ -225,6 +225,11 @@ impl App for ExternApp {
         let mut b = OP_KEY.to_le_bytes().to_vec();
         b.extend_from_slice(&code.to_le_bytes());
         b.push(1); // key down
+        self.send(b);
+    }
+    fn on_ctrl_key(&mut self, code: u16) {
+        let mut b = OP_CTRL.to_le_bytes().to_vec();
+        b.extend_from_slice(&(code as u32).to_le_bytes());
         self.send(b);
     }
     fn wants_pointer(&self) -> bool {
