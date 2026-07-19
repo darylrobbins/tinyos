@@ -51,7 +51,7 @@ struct Idtr {
     base: u64,
 }
 
-static mut IDT: [Entry; 32] = [Entry::EMPTY; 32];
+static mut IDT: [Entry; 256] = [Entry::EMPTY; 256];
 
 fn report(vector: u64, error: u64, frame: &StackFrame) -> ! {
     unsafe { crate::logger::force_unlock() };
@@ -114,13 +114,29 @@ pub fn install() {
         handler!(31),
     ];
 
+    // IRQ gates: LAPIC timer, virtio input lines, and the spurious vector.
+    extern "x86-interrupt" fn timer_gate(_f: StackFrame) {
+        super::irq::on_timer_irq();
+    }
+    extern "x86-interrupt" fn input_gate(_f: StackFrame) {
+        super::irq::on_input_irq();
+    }
+    extern "x86-interrupt" fn spurious_gate(_f: StackFrame) {
+        // No EOI for spurious interrupts.
+    }
+
     unsafe {
         let idt = &mut *core::ptr::addr_of_mut!(IDT);
         for (entry, &h) in idt.iter_mut().zip(handlers.iter()) {
             entry.set(h, cs);
         }
+        idt[super::apic::VEC_TIMER as usize].set(timer_gate as u64, cs);
+        for v in super::apic::VEC_INPUT_BASE..super::apic::VEC_INPUT_BASE + 8 {
+            idt[v as usize].set(input_gate as u64, cs);
+        }
+        idt[0xFF].set(spurious_gate as u64, cs);
         let idtr = Idtr {
-            limit: (size_of::<[Entry; 32]>() - 1) as u16,
+            limit: (size_of::<[Entry; 256]>() - 1) as u16,
             base: idt.as_ptr() as u64,
         };
         asm!("lidt [{0}]", in(reg) &idtr);

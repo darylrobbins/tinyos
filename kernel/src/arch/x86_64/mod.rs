@@ -1,3 +1,4 @@
+pub mod apic;
 pub mod exceptions;
 pub mod io;
 pub mod irq;

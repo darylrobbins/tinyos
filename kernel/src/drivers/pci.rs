@@ -43,6 +43,11 @@ impl PciDevice {
         mmio::r8(self.cfg(off))
     }
 
+    /// Firmware-programmed legacy interrupt line (PCI config 0x3C).
+    pub fn interrupt_line(&self) -> u8 {
+        self.read8(0x3C)
+    }
+
     /// Enable memory space + bus mastering.
     pub fn enable(&self) {
         let cmd = self.read16(0x04);

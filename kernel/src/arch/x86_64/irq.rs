@@ -1,15 +1,107 @@
-//! Stub until K3 brings LAPIC/IOAPIC parity: no interrupts, busy wait.
+//! IRQ facade for x86_64: LAPIC one-shot timer + IOAPIC-routed virtio
+//! INTx, tickless `hlt` sleeping. The legacy 8259 PICs are fully masked.
+//! Handlers only ack + set atomics; the main loop does all real work.
+//!
+//! Interrupt-flag discipline: IF stays clear during normal execution;
+//! `sleep_until` runs `sti; hlt; cli` per wait, so handlers run only
+//! inside the sleep window (mirroring wfi+DAIF masking on aarch64).
 
-use core::sync::atomic::AtomicUsize;
+use core::arch::asm;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+
+use super::apic;
+use super::io::outb;
+
+pub static WAKE_INPUT: AtomicBool = AtomicBool::new(false);
+static WAKES: AtomicU32 = AtomicU32::new(0);
+static SLEPT_US: AtomicU64 = AtomicU64::new(0);
+static WINDOW_START_US: AtomicU64 = AtomicU64::new(0);
+static LAST_RATE: AtomicU32 = AtomicU32::new(0);
+static LAST_IDLE_PCT: AtomicU32 = AtomicU32::new(0);
 
 pub static INPUT_ISR_ADDRS: [AtomicUsize; 8] = [const { AtomicUsize::new(0) }; 8];
 
-pub fn init() {}
+/// GSIs of the virtio input devices, registered before init() by the
+/// input driver via `register_input_gsi`.
+static INPUT_GSIS: [AtomicU32; 8] = [const { AtomicU32::new(u32::MAX) }; 8];
+
+pub fn register_input_gsi(slot: usize, gsi: u32) {
+    if slot < INPUT_GSIS.len() {
+        INPUT_GSIS[slot].store(gsi, Ordering::Relaxed);
+    }
+}
+
+pub fn init() {
+    // Mask both 8259 PICs entirely — the IOAPIC owns everything.
+    outb(0x21, 0xFF);
+    outb(0xA1, 0xFF);
+
+    apic::init();
+
+    for (i, gsi) in INPUT_GSIS.iter().enumerate() {
+        let gsi = gsi.load(Ordering::Relaxed);
+        if gsi != u32::MAX {
+            apic::ioapic_redirect(gsi, apic::VEC_INPUT_BASE + i as u8);
+        }
+    }
+
+    WINDOW_START_US.store(super::timer::uptime_us(), Ordering::Relaxed);
+}
 
 pub fn sleep_until(deadline_us: u64) {
-    super::timer::wait_until_us(deadline_us);
+    loop {
+        let now = super::timer::uptime_us();
+        if now >= deadline_us || WAKE_INPUT.swap(false, Ordering::Acquire) {
+            break;
+        }
+        apic::set_timer_us(deadline_us);
+        unsafe {
+            // sti takes effect after the next instruction, so no wake can
+            // be lost between sti and hlt.
+            asm!("sti", "hlt", "cli");
+        }
+        let woke = super::timer::uptime_us();
+        SLEPT_US.fetch_add(woke - now, Ordering::Relaxed);
+        WAKES.fetch_add(1, Ordering::Relaxed);
+    }
+    apic::clear_timer();
+    update_stats();
+}
+
+fn update_stats() {
+    let now = super::timer::uptime_us();
+    let start = WINDOW_START_US.load(Ordering::Relaxed);
+    let span = now - start;
+    if span >= 1_000_000 {
+        let wakes = WAKES.swap(0, Ordering::Relaxed);
+        let slept = SLEPT_US.swap(0, Ordering::Relaxed);
+        LAST_RATE.store((wakes as u64 * 1_000_000 / span) as u32, Ordering::Relaxed);
+        LAST_IDLE_PCT.store((slept * 100 / span).min(100) as u32, Ordering::Relaxed);
+        WINDOW_START_US.store(now, Ordering::Relaxed);
+    }
 }
 
 pub fn wake_stats() -> (u32, u32) {
-    (0, 0)
+    (
+        LAST_RATE.load(Ordering::Relaxed),
+        LAST_IDLE_PCT.load(Ordering::Relaxed),
+    )
+}
+
+/// Called from the timer-vector gate.
+pub fn on_timer_irq() {
+    apic::clear_timer();
+    apic::eoi();
+}
+
+/// Called from any input-vector gate: deassert INTx, flag the wake.
+pub fn on_input_irq() {
+    for slot in &INPUT_ISR_ADDRS {
+        let addr = slot.load(Ordering::Relaxed);
+        if addr != 0 {
+            let _ = crate::drivers::mmio::r8(addr);
+        }
+    }
+    WAKE_INPUT.store(true, Ordering::Release);
+    apic::eoi();
 }

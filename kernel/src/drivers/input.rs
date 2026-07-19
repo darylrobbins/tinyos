@@ -54,6 +54,11 @@ impl Input {
                         // deassert level-triggered INTx.
                         let slot = &crate::arch::irq::INPUT_ISR_ADDRS[devices.len()];
                         slot.store(v.isr_addr(), core::sync::atomic::Ordering::Relaxed);
+                        #[cfg(target_arch = "x86_64")]
+                        crate::arch::irq::register_input_gsi(
+                            devices.len(),
+                            dev.interrupt_line() as u32,
+                        );
                         devices.push(v);
                     }
                     None => kprintln!("tinyos: virtio-input init FAILED (bdf {:#x})", dev.bdf),
