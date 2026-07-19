@@ -111,6 +111,12 @@ pub fn wake_stats(cpu: usize) -> (u32, u32) {
 
 #[unsafe(no_mangle)]
 extern "C" fn irq_entry() {
+    handle_pending();
+}
+
+/// Ack-and-flag every pending GIC interrupt. Called from the current-EL IRQ
+/// stub and from the EL0 preemption path.
+pub(crate) fn handle_pending() {
     loop {
         let id = gic::ack();
         if id >= 1020 {

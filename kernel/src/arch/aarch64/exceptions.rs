@@ -1,7 +1,8 @@
 use core::arch::{asm, global_asm};
 
-// Minimal EL1 vector table: every entry reports the exception over serial and
-// parks. No exception is recoverable yet (no interrupts are enabled).
+// EL1 vector table. Current-EL sync exceptions report and park; the
+// current-EL IRQ slot and both lower-EL (EL0) slots are fully handled
+// (see user.rs for the EL0 trap path).
 global_asm!(
     r#"
 .macro VEC kind
@@ -25,8 +26,10 @@ __vector_table:
     b __irq_stub
     VEC 6
     VEC 7
-    VEC 8
-    VEC 9
+.balign 0x80
+    b __user_sync
+.balign 0x80
+    b __user_irq
     VEC 10
     VEC 11
     VEC 12

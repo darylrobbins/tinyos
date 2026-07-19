@@ -216,11 +216,21 @@ impl Terminal {
                 Ok(id) => self.out(format!("kill: no such thread {id}"), ERR),
                 Err(_) => self.out("usage: kill <id>".to_string(), ERR),
             },
+            "usertest" => self.usertest(rest.trim()),
             "sudo" => self.out(
                 "daryl is not in the sudoers file. This incident will be reported.".to_string(),
                 ERR,
             ),
             _ => self.out(format!("command not found: {name}"), ERR),
+        }
+    }
+
+    /// EL0 smoke test (see obj::usertest). `usertest spin` = unkillable-by-
+    /// cooperation EL0 loop, proving timer preemption and `kill`.
+    fn usertest(&mut self, arg: &str) {
+        match crate::obj::usertest::spawn(arg == "spin") {
+            Ok(id) => self.out(format!("usertest: spawned EL0 thread {id}"), FG),
+            Err(e) => self.out(format!("usertest: {e}"), ERR),
         }
     }
 

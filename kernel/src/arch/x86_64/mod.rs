@@ -3,8 +3,10 @@ pub mod context;
 pub mod exceptions;
 pub mod io;
 pub mod irq;
+pub mod paging;
 pub mod smp;
 pub mod timer;
+pub mod user;
 
 use core::arch::asm;
 use core::fmt;

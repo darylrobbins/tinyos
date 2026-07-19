@@ -14,7 +14,7 @@ use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use spin::Mutex;
 
 use crate::arch::{self, context, cpu_id, MAX_CPUS};
-use thread::{Class, State, Thread, ThreadInfo};
+use thread::{Class, State, Thread, ThreadInfo, UserInit};
 
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 static ONLINE: AtomicUsize = AtomicUsize::new(1);
@@ -59,6 +59,49 @@ pub fn spawn(name: String, class: Class, affinity: u8, entry: fn()) -> u32 {
     READY.lock().push_back(t);
     arch::irq::kick_others(cpu_id());
     id
+}
+
+/// Spawn a thread that enters EL0 at `pc` with `sp`/`arg` once scheduled.
+pub fn spawn_user(
+    name: String,
+    class: Class,
+    affinity: u8,
+    aspace: Arc<spin::Mutex<crate::arch::paging::AddrSpace>>,
+    pc: u64,
+    sp: u64,
+    arg: u64,
+) -> u32 {
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let t = Arc::new(Thread::new_user(
+        id,
+        name,
+        class,
+        affinity,
+        user_trampoline,
+        aspace,
+        UserInit { pc, sp, arg },
+    ));
+    THREADS.lock().push(t.clone());
+    READY.lock().push_back(t);
+    arch::irq::kick_others(cpu_id());
+    id
+}
+
+/// Kernel-side entry of every user thread: drop to EL0. The scheduler has
+/// already activated this thread's TTBR1.
+fn user_trampoline() {
+    let me = current();
+    let u = me.user.as_ref().expect("user thread without UserInit");
+    unsafe { arch::user::enter_user(u.pc, u.sp, u.arg) }
+}
+
+/// Requeue the current (user) thread from the EL0 preemption path. Unlike
+/// `yield_now` this never opens an IRQ service window — we're already in
+/// one — and leaves kill handling to the trap tail.
+pub fn preempt_from_user() {
+    let me = current();
+    arch::irq::note_busy(cpu_id());
+    schedule(Handoff::Requeue(me));
 }
 
 pub fn current() -> Arc<Thread> {
@@ -173,6 +216,10 @@ pub(crate) fn schedule(handoff: Handoff) {
 
     next.set_state(State::Running);
     next.last_cpu.store(cpu as u8, Ordering::Relaxed);
+    // Make the incoming thread's user address space current before its
+    // kernel context resumes: it may be mid-syscall, about to touch user
+    // buffers (possibly on a different CPU than it blocked on).
+    arch::user::activate(next.user_ttbr1);
     let old_ctx = me.ctx_ptr();
     let new_ctx = next.ctx_ptr();
     {

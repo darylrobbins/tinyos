@@ -11,6 +11,7 @@ mod arch;
 mod drivers;
 mod gfx;
 mod mem;
+mod obj;
 mod sched;
 mod term;
 mod ui;
@@ -165,6 +166,7 @@ fn ui_thread_main() {
 
     let mut shell = ui::shell::Shell::new(fb.width, fb.height);
     kprintln!("tinyos: shell up");
+    obj::usertest::boot_hook();
 
     let mut events = alloc::vec::Vec::new();
     let mut deadline = 0u64;

@@ -3,10 +3,14 @@
 
 use alloc::boxed::Box;
 use alloc::string::String;
+use alloc::sync::Arc;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 
+use spin::Mutex;
+
 use crate::arch::context::Context;
+use crate::arch::paging::AddrSpace;
 
 pub const STACK_SIZE: usize = 64 * 1024;
 
@@ -40,6 +44,21 @@ pub struct Thread {
     pub wake_deadline: AtomicU64,
     ctx: UnsafeCell<Context>,
     _stack: Option<Box<[u8]>>, // None for adopted boot/AP stacks
+    /// The userspace seam: a user thread carries its address space (shared
+    /// with the owning process later) and its EL0 entry state. The 64 KiB
+    /// `_stack` doubles as the kernel stack traps land on.
+    pub aspace: Option<Arc<Mutex<AddrSpace>>>,
+    pub user: Option<UserInit>,
+    /// Cached TTBR1 value (root | ASID) for lock-free scheduler activation;
+    /// 0 = kernel-only thread.
+    pub user_ttbr1: u64,
+}
+
+/// EL0 entry state consumed by the user trampoline.
+pub struct UserInit {
+    pub pc: u64,
+    pub sp: u64,
+    pub arg: u64,
 }
 
 // Safety: `ctx` is only accessed by the CPU switching this thread in or out,
@@ -62,7 +81,29 @@ impl Thread {
             wake_deadline: AtomicU64::new(u64::MAX),
             ctx: UnsafeCell::new(Context::new(top, entry)),
             _stack: Some(stack),
+            aspace: None,
+            user: None,
+            user_ttbr1: 0,
         }
+    }
+
+    /// A thread that enters EL0: same as `new`, but carrying an address
+    /// space and entry state for the user trampoline.
+    pub fn new_user(
+        id: u32,
+        name: String,
+        class: Class,
+        affinity: u8,
+        entry: fn(),
+        aspace: Arc<Mutex<AddrSpace>>,
+        user: UserInit,
+    ) -> Self {
+        let user_ttbr1 = aspace.lock().ttbr1();
+        let mut t = Self::new(id, name, class, affinity, entry);
+        t.aspace = Some(aspace);
+        t.user = Some(user);
+        t.user_ttbr1 = user_ttbr1;
+        t
     }
 
     /// TCB for a context that already exists (the boot stack becomes CPU 0's
@@ -79,6 +120,9 @@ impl Thread {
             wake_deadline: AtomicU64::new(u64::MAX),
             ctx: UnsafeCell::new(Context::empty()),
             _stack: None,
+            aspace: None,
+            user: None,
+            user_ttbr1: 0,
         }
     }
 

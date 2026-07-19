@@ -250,6 +250,24 @@ impl AddrSpace {
     }
 }
 
+/// Make freshly written code visible to instruction fetch: clean dcache to
+/// PoU and invalidate icache for the range. Call after writing user code
+/// pages (via their identity-mapped PA) and before any EL0 execution.
+pub fn sync_icache(pa: usize, len: usize) {
+    let mut a = pa & !63;
+    while a < pa + len {
+        unsafe { asm!("dc cvau, {0}", in(reg) a) };
+        a += 64;
+    }
+    unsafe { asm!("dsb ish") };
+    let mut a = pa & !63;
+    while a < pa + len {
+        unsafe { asm!("ic ivau, {0}", in(reg) a) };
+        a += 64;
+    }
+    unsafe { asm!("dsb ish", "isb") };
+}
+
 fn tlbi_page(asid: u16, va: u64) {
     let arg = ((asid as u64) << 48) | ((va >> 12) & 0xFFF_FFFF_FFFF);
     unsafe { asm!("dsb ishst", "tlbi vae1is, {0}", in(reg) arg) };
