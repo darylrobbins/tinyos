@@ -22,7 +22,11 @@ struct OpenFile {
 
 pub struct FsService {
     ch: Arc<ChannelEnd>,
-    /// Base directory for relative paths (spawner's cwd at spawn time).
+    /// Jail root (canonical absolute dir, no trailing '/'; "/" = unconfined).
+    /// The app's whole namespace is re-rooted here: its "/" is this dir, and
+    /// `..` clamps at it. The jail is the security boundary; `base` is not.
+    jail: String,
+    /// Cwd *within the jail* for relative paths (spawner's cwd at spawn time).
     base: String,
     fds: Vec<Option<OpenFile>>,
 }
@@ -51,9 +55,29 @@ fn utf8(b: &[u8]) -> Option<&str> {
     core::str::from_utf8(b).ok()
 }
 
+/// Map an app-visible path into a real filesystem path: canonicalize against
+/// the in-jail cwd (absolute paths and `..` clamp at the app's "/"), then
+/// re-root at the jail. Every FsService op funnels through this.
+pub fn jailed_path(jail: &str, base: &str, path: &str) -> Result<String, u32> {
+    let inner = tinyfs::path::canonical(base, path).map_err(status)?;
+    Ok(if jail == "/" {
+        inner
+    } else if inner == "/" {
+        jail.to_string()
+    } else {
+        let mut s = String::from(jail);
+        s.push_str(&inner);
+        s
+    })
+}
+
 impl FsService {
-    pub fn new(ch: Arc<ChannelEnd>, base: String) -> Self {
-        Self { ch, base, fds: Vec::new() }
+    pub fn new(ch: Arc<ChannelEnd>, jail: String, base: String) -> Self {
+        Self { ch, jail, base, fds: Vec::new() }
+    }
+
+    fn resolve(&self, path: &str) -> Result<String, u32> {
+        jailed_path(&self.jail, &self.base, path)
     }
 
     /// Drain and answer every queued request.
@@ -75,15 +99,15 @@ impl FsService {
             OP_WRITE => self.op_write(b),
             OP_STAT => self.op_stat(b),
             OP_READDIR => self.op_readdir(b),
-            OP_MKDIR => self.path_op(b, 4, |base, p| {
-                crate::fs::mkdir(base, p).map_err(status)
+            OP_MKDIR => self.path_op(b, 4, |p| {
+                crate::fs::mkdir("/", p).map_err(status)
             }),
             OP_REMOVE => {
                 let Some(recursive) = le_u32(b, 4) else {
                     return r_status(FS_INVALID);
                 };
-                self.path_op(b, 8, |base, p| {
-                    crate::fs::remove(base, p, recursive != 0).map_err(status)
+                self.path_op(b, 8, |p| {
+                    crate::fs::remove("/", p, recursive != 0).map_err(status)
                 })
             }
             OP_RENAME => {
@@ -96,7 +120,11 @@ impl FsService {
                 ) else {
                     return r_status(FS_INVALID);
                 };
-                match crate::fs::rename(&self.base, from, to) {
+                let (from, to) = match (self.resolve(from), self.resolve(to)) {
+                    (Ok(f), Ok(t)) => (f, t),
+                    (Err(st), _) | (_, Err(st)) => return r_status(st),
+                };
+                match crate::fs::rename("/", &from, &to) {
                     Ok(()) => r_status(FS_OK),
                     Err(e) => r_status(status(e)),
                 }
@@ -109,12 +137,12 @@ impl FsService {
         &mut self,
         b: &[u8],
         off: usize,
-        f: impl Fn(&str, &str) -> Result<(), u32>,
+        f: impl Fn(&str) -> Result<(), u32>,
     ) -> Vec<u8> {
         let Some(path) = b.get(off..).and_then(utf8) else {
             return r_status(FS_INVALID);
         };
-        match f(&self.base, path) {
+        match self.resolve(path).and_then(|p| f(&p)) {
             Ok(()) => r_status(FS_OK),
             Err(st) => r_status(st),
         }
@@ -124,7 +152,12 @@ impl FsService {
         let (Some(flags), Some(path)) = (le_u32(b, 4), b.get(8..).and_then(utf8)) else {
             return r_status(FS_INVALID);
         };
-        let exists = match crate::fs::read(&self.base, path) {
+        // OpenFile stores the jailed-absolute path: fd ops never re-resolve.
+        let path = match self.resolve(path) {
+            Ok(p) => p,
+            Err(st) => return reply2(R_OPEN, st, 0),
+        };
+        let exists = match crate::fs::read("/", &path) {
             Ok(_) => true,
             Err(FsError::IsADir) => return reply2(R_OPEN, FS_IS_DIR, 0),
             Err(FsError::NotFound) => false,
@@ -134,14 +167,14 @@ impl FsService {
             return reply2(R_OPEN, FS_NOT_FOUND, 0);
         }
         if (!exists || flags & O_TRUNC != 0) && flags & (O_WRITE | O_CREATE) != 0 {
-            if let Err(e) = crate::fs::write(&self.base, path, &[], false) {
+            if let Err(e) = crate::fs::write("/", &path, &[], false) {
                 return reply2(R_OPEN, status(e), 0);
             }
         }
         if self.fds.iter().filter(|f| f.is_some()).count() >= MAX_FDS {
             return reply2(R_OPEN, FS_LIMIT, 0);
         }
-        let file = OpenFile { path: path.to_string(), writable: flags & O_WRITE != 0 };
+        let file = OpenFile { path, writable: flags & O_WRITE != 0 };
         let fd = match self.fds.iter().position(Option::is_none) {
             Some(i) => {
                 self.fds[i] = Some(file);
@@ -179,7 +212,7 @@ impl FsService {
             (Err(st), ..) => return reply1(R_READ, st),
             _ => return reply1(R_READ, FS_INVALID),
         };
-        match crate::fs::read(&self.base, &path) {
+        match crate::fs::read("/", &path) {
             Ok(data) => {
                 let start = (offset as usize).min(data.len());
                 let end = (start + len as usize).min(data.len());
@@ -207,11 +240,11 @@ impl FsService {
             return r_status(FS_LIMIT);
         }
         let res = if offset == OFFSET_APPEND {
-            crate::fs::write(&self.base, &path, data, true)
+            crate::fs::write("/", &path, data, true)
         } else {
             // Read-modify-write: correct, O(file); a cache changes this
             // behind the same protocol later.
-            let mut cur = match crate::fs::read(&self.base, &path) {
+            let mut cur = match crate::fs::read("/", &path) {
                 Ok(c) => c,
                 Err(e) => return r_status(status(e)),
             };
@@ -220,7 +253,7 @@ impl FsService {
                 cur.resize(end, 0);
             }
             cur[offset as usize..end].copy_from_slice(data);
-            crate::fs::write(&self.base, &path, &cur, false)
+            crate::fs::write("/", &path, &cur, false)
         };
         match res {
             Ok(()) => r_status(FS_OK),
@@ -232,12 +265,16 @@ impl FsService {
         let Some(path) = b.get(4..).and_then(utf8) else {
             return r_stat(FS_INVALID, 0, 0);
         };
+        let path = match self.resolve(path) {
+            Ok(p) => p,
+            Err(st) => return r_stat(st, 0, 0),
+        };
         // A dir resolves via resolve_dir; a file reads (whole-file — fine
         // at hobby scale, revisit with a real stat when tinyfs grows one).
-        if crate::fs::resolve_dir(&self.base, path).is_ok() {
+        if crate::fs::resolve_dir("/", &path).is_ok() {
             return r_stat(FS_OK, KIND_DIR, 0);
         }
-        match crate::fs::read(&self.base, path) {
+        match crate::fs::read("/", &path) {
             Ok(data) => r_stat(FS_OK, KIND_FILE, data.len() as u64),
             Err(e) => r_stat(status(e), 0, 0),
         }
@@ -247,7 +284,11 @@ impl FsService {
         let Some(path) = b.get(4..).and_then(utf8) else {
             return r_status(FS_INVALID);
         };
-        match crate::fs::list(&self.base, path) {
+        let path = match self.resolve(path) {
+            Ok(p) => p,
+            Err(st) => return r_status(st),
+        };
+        match crate::fs::list("/", &path) {
             Ok(entries) => {
                 let mut r = reply1(R_DIR, FS_OK);
                 r.extend_from_slice(&(entries.len() as u32).to_le_bytes());

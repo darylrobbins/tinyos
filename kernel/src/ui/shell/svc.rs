@@ -27,11 +27,17 @@ impl SvcJob {
         let app = crate::obj::loader::spawn(name.to_string(), &elf, argv)
             .map_err(|e| e.msg())?;
         super::extern_app::register(app.shell, name.to_string());
+        // Launcher-spawned apps are jailed to a private data dir: their "/"
+        // is /data/<name>, created on first spawn. Only the terminal's `run`
+        // (an explicit user action) grants a wider view.
+        let jail = format!("/data/{name}");
+        let _ = crate::fs::mkdir("/", "/data");
+        let _ = crate::fs::mkdir("/", &jail);
         Ok(SvcJob {
             name: name.to_string(),
             process: app.process,
             console: app.console,
-            fs: crate::fs::service::FsService::new(app.fs, String::from("/")),
+            fs: crate::fs::service::FsService::new(app.fs, jail, String::from("/")),
             // Launcher-spawned: read-only proc service (no kill authority).
             proc: crate::obj::procsrv::ProcService::new(app.proc, false),
             partial: String::new(),

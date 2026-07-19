@@ -100,6 +100,23 @@ pub fn run() -> Vec<String> {
         st == ST_OK && sets[0].2 & SIG_READABLE != 0 && waited >= 25_000 && rx.recv().is_ok(),
     );
 
+    // FS jail: no app-supplied path may resolve outside the jail root.
+    let jp = crate::fs::service::jailed_path;
+    check(
+        "jail: absolute path re-roots",
+        jp("/data/app", "/", "/apps/evil") == Ok(String::from("/data/app/apps/evil")),
+    );
+    check(
+        "jail: .. clamps at jail root",
+        jp("/data/app", "/", "../../../apps/evil") == Ok(String::from("/data/app/apps/evil"))
+            && jp("/data/app", "/", "..") == Ok(String::from("/data/app"))
+            && jp("/data/app", "/sub", "../../..") == Ok(String::from("/data/app")),
+    );
+    check(
+        "jail: '/' jail stays unconfined",
+        jp("/", "/home", "../x") == Ok(String::from("/x")),
+    );
+
     out
 }
 
