@@ -1,6 +1,13 @@
 //! Process-control service (abi::proc v0): one app's PROC channel, pumped
 //! each frame by the terminal that spawned it. Same shape as fs::service —
 //! in-kernel today, protocol-compatible with a userspace re-host.
+//!
+//! Authorization: KILL is (a) gated per service instance — spawners grant it
+//! only to apps the user launched explicitly — and (b) limited to threads of
+//! user processes; kernel threads are never killable over this protocol
+//! (the trusted shell builtin still can). PS/SYSINFO expose global names and
+//! sizes by design: that visibility is the tool's purpose and tinyOS has no
+//! multi-user boundary — the capability gate is receiving the grant at all.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -13,22 +20,23 @@ use crate::sched::thread::{Class, State};
 
 pub struct ProcService {
     ch: Arc<ChannelEnd>,
+    can_kill: bool,
 }
 
 impl ProcService {
-    pub fn new(ch: Arc<ChannelEnd>) -> Self {
-        Self { ch }
+    pub fn new(ch: Arc<ChannelEnd>, can_kill: bool) -> Self {
+        Self { ch, can_kill }
     }
 
     pub fn pump(&mut self) {
         while let Ok(msg) = self.ch.recv() {
-            let reply = handle(&msg.bytes);
+            let reply = handle(&msg.bytes, self.can_kill);
             let _ = self.ch.send(Message { bytes: reply, handles: Vec::new() });
         }
     }
 }
 
-fn handle(b: &[u8]) -> Vec<u8> {
+fn handle(b: &[u8], can_kill: bool) -> Vec<u8> {
     let op = b
         .get(0..4)
         .map(|c| u32::from_le_bytes(c.try_into().unwrap()));
@@ -84,7 +92,10 @@ fn handle(b: &[u8]) -> Vec<u8> {
             else {
                 return reply1(R_STATUS, PROC_INVALID);
             };
-            if id == sched::ui_thread_id() {
+            let is_user_thread = crate::obj::process::Process::snapshot()
+                .iter()
+                .any(|(_, _, tid, _)| *tid == id);
+            if !can_kill || !is_user_thread || id == sched::ui_thread_id() {
                 reply1(R_STATUS, PROC_DENIED)
             } else if sched::kill(id) {
                 reply1(R_STATUS, PROC_OK)

@@ -620,7 +620,9 @@ impl Terminal {
                             app.fs,
                             self.cwd.clone(),
                         ),
-                        proc_srv: crate::obj::procsrv::ProcService::new(app.proc),
+                        // User-launched via `run`: the user's explicit action is the
+                        // authorization for kill.
+                        proc_srv: crate::obj::procsrv::ProcService::new(app.proc, true),
                         process: app.process,
                         thread_id: app.thread_id,
                         console: app.console,
