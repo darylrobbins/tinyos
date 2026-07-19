@@ -118,6 +118,14 @@ impl Terminal {
         t
     }
 
+    /// True while a foreground or background app is alive: the hosting card
+    /// reports this as `wants_frames` so the shell keeps a steady frame clock
+    /// and pumps the app's console (which the app can fill faster than one
+    /// frame drains) instead of deep-idling until the next input event.
+    pub fn is_hosting(&self) -> bool {
+        self.running.is_some() || !self.bg_jobs.is_empty()
+    }
+
     /// Size in cells; the hosting card updates this from its rect.
     pub fn set_size(&mut self, cols: usize, rows: usize) {
         self.view.cols = cols;

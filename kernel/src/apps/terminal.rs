@@ -38,6 +38,11 @@ impl App for TerminalApp {
         (340, 220)
     }
 
+    fn wants_frames(&self) -> bool {
+        // Keep the shell composing (and pumping) while we host a live app.
+        self.term.is_hosting()
+    }
+
     fn draw(&mut self, s: &mut Surface, fonts: &mut Fonts, body: Rect, _focused: bool, now: u64) {
         let rows = (body.h / CELL_H).max(2) as usize;
         self.term.set_size((body.w / CELL_W).max(10) as usize, rows);
