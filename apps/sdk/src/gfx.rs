@@ -262,6 +262,21 @@ impl<'a> Canvas<'a> {
             }
         }
     }
+
+    /// Draw an 8bpp alpha mask (row-major coverage, e.g. a pre-rasterized
+    /// anti-aliased glyph) tinted with `color`.
+    pub fn draw_alpha_mask(&mut self, x: i32, y: i32, mask: &[u8], w: i32, h: i32, color: u32) {
+        let ca = color >> 24;
+        for my in 0..h {
+            for mx in 0..w {
+                let a = mask[(my * w + mx) as usize] as u32;
+                if a > 0 {
+                    let sa = (a * ca / 255) as u32;
+                    self.put(x + mx, y + my, (color & 0x00FF_FFFF) | sa << 24);
+                }
+            }
+        }
+    }
 }
 
 /// Pixel size of `s` drawn with `draw_text` at `scale`.

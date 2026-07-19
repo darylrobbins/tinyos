@@ -74,6 +74,16 @@ impl Window {
         }
     }
 
+    /// Copy a fully-drawn back buffer into the surface, then present. The
+    /// shell only displays presented frames, so drawing into a back buffer
+    /// and presenting with this keeps partial renders off screen.
+    pub fn present_from(&mut self, back: &[u32]) {
+        let px = self.pixels();
+        let n = px.len().min(back.len());
+        px[..n].copy_from_slice(&back[..n]);
+        self.present();
+    }
+
     /// Present the whole surface.
     pub fn present(&self) {
         let mut msg = Vec::new();

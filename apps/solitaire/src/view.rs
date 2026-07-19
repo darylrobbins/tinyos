@@ -5,6 +5,8 @@ use alloc::vec::Vec;
 use solitaire::{Card, Game, Loc, Suit};
 use tinyos_app::gfx::{self, argb, rgb, with_alpha, Canvas, Rect};
 
+use crate::glyphs::{self, Glyph};
+
 pub const WIN_W: i32 = 920;
 pub const WIN_H: i32 = 640;
 
@@ -22,30 +24,21 @@ const INK_BLACK: u32 = rgb(0x1a, 0x1e, 0x26);
 const INK_RED: u32 = rgb(0xb8, 0x4a, 0x4a); // HUE_RED deepened for light cards
 const CARD_BACK: u32 = rgb(0x0e, 0x11, 0x17);
 
-// 16x16 1bpp suit masks, bit 0 = leftmost pixel.
-const HEART: [u16; 16] = [
-    0x3E7C, 0x7FFE, 0x7FFE, 0xFFFF, 0xFFFF, 0x7FFE, 0x7FFE, 0x3FFC, 0x1FF8, 0x0FF0, 0x07E0,
-    0x03C0, 0x0180, 0x0000, 0x0000, 0x0000,
-];
-const DIAMOND: [u16; 16] = [
-    0x0000, 0x0180, 0x0180, 0x03C0, 0x07E0, 0x0FF0, 0x0FF0, 0x1FF8, 0x1FF8, 0x0FF0, 0x0FF0,
-    0x07E0, 0x03C0, 0x0180, 0x0180, 0x0000,
-];
-const SPADE: [u16; 16] = [
-    0x0000, 0x0180, 0x03C0, 0x07E0, 0x0FF0, 0x1FF8, 0x3FFC, 0x7FFE, 0x7FFE, 0xFFFF, 0x7FFE,
-    0x7FFE, 0x0180, 0x03C0, 0x07E0, 0x0FF0,
-];
-const CLUB: [u16; 16] = [
-    0x0000, 0x0180, 0x07E0, 0x07E0, 0x07E0, 0x1FF8, 0x3FFC, 0x7FFE, 0x7FFE, 0x7E7E, 0x3FFC,
-    0x1FF8, 0x03C0, 0x07E0, 0x0FF0, 0x1FF8,
-];
-
-fn suit_mask(s: Suit) -> &'static [u16; 16] {
+fn suit_small(s: Suit) -> &'static Glyph {
     match s {
-        Suit::Hearts => &HEART,
-        Suit::Diamonds => &DIAMOND,
-        Suit::Spades => &SPADE,
-        Suit::Clubs => &CLUB,
+        Suit::Hearts => &glyphs::HEART_SM,
+        Suit::Diamonds => &glyphs::DIAMOND_SM,
+        Suit::Spades => &glyphs::SPADE_SM,
+        Suit::Clubs => &glyphs::CLUB_SM,
+    }
+}
+
+fn suit_big(s: Suit) -> &'static Glyph {
+    match s {
+        Suit::Hearts => &glyphs::HEART_BIG,
+        Suit::Diamonds => &glyphs::DIAMOND_BIG,
+        Suit::Spades => &glyphs::SPADE_BIG,
+        Suit::Clubs => &glyphs::CLUB_BIG,
     }
 }
 
@@ -57,22 +50,8 @@ fn ink(s: Suit) -> u32 {
     }
 }
 
-fn rank_str(rank: u8) -> &'static str {
-    match rank {
-        1 => "A",
-        2 => "2",
-        3 => "3",
-        4 => "4",
-        5 => "5",
-        6 => "6",
-        7 => "7",
-        8 => "8",
-        9 => "9",
-        10 => "10",
-        11 => "J",
-        12 => "Q",
-        _ => "K",
-    }
+fn draw_glyph(c: &mut Canvas, x: i32, y: i32, g: &Glyph, color: u32) {
+    c.draw_alpha_mask(x, y, g.data, g.w, g.h, color);
 }
 
 fn col_x(col: i32) -> i32 {
@@ -152,6 +131,31 @@ pub fn hit_test(g: &Game, x: i32, y: i32) -> Option<Hit> {
     None
 }
 
+/// Small pill anchored at its bottom-right corner showing `n` in crisp digits.
+fn draw_count_badge(c: &mut Canvas, right: i32, bottom: i32, n: usize) {
+    let mut digits: Vec<&Glyph> = Vec::new();
+    let mut v = n.max(0);
+    loop {
+        digits.push(glyphs::DIGITS[v % 10]);
+        v /= 10;
+        if v == 0 {
+            break;
+        }
+    }
+    digits.reverse();
+    let tw: i32 = digits.iter().map(|g| g.w).sum();
+    let th = digits.iter().map(|g| g.h).max().unwrap_or(0);
+    let (pw, ph) = (tw + 14, th + 6);
+    let pill = Rect::new(right - pw, bottom - ph, pw, ph);
+    c.fill_rounded_rect(pill, ph / 2, argb(225, 0x0e, 0x11, 0x17));
+    c.stroke_rounded_rect(pill, ph / 2, 1, gfx::STROKE2);
+    let mut tx = pill.x + 7;
+    for g in digits {
+        draw_glyph(c, tx, pill.y + (ph - g.h) / 2, g, gfx::TX);
+        tx += g.w;
+    }
+}
+
 fn draw_empty_slot(c: &mut Canvas, r: Rect) {
     c.fill_rounded_rect(r, 8, gfx::CARD);
     c.stroke_rounded_rect(r, 8, 1, gfx::STROKE);
@@ -179,15 +183,16 @@ pub fn draw_card(c: &mut Canvas, x: i32, y: i32, card: Card) {
     c.fill_rounded_rect(r, 8, CARD_FACE);
     c.stroke_rounded_rect(r, 8, 1, argb(70, 0x0a, 0x0c, 0x10));
     let color = ink(card.suit);
-    c.draw_text(x + 9, y + 8, rank_str(card.rank), 2, color);
-    c.draw_mask(x + CARD_W - 25, y + 8, suit_mask(card.suit), 16, 16, 1, color);
-    c.draw_mask(
-        x + (CARD_W - 48) / 2,
-        y + (CARD_H - 48) / 2 + 8,
-        suit_mask(card.suit),
-        16,
-        16,
-        3,
+    let rank = &glyphs::RANKS[card.rank as usize - 1];
+    draw_glyph(c, x + 9, y + 8, rank, color);
+    let sm = suit_small(card.suit);
+    draw_glyph(c, x + CARD_W - sm.w - 9, y + 8, sm, color);
+    let big = suit_big(card.suit);
+    draw_glyph(
+        c,
+        x + (CARD_W - big.w) / 2,
+        y + (CARD_H - big.h) / 2 + 10,
+        big,
         color,
     );
 }
@@ -226,15 +231,35 @@ pub fn draw_scene(c: &mut Canvas, g: &Game, drag: Option<&DragView>, status: &st
         }
     };
 
-    // Stock.
+    // Stock: stacked-edge depth cue + remaining-count badge; once empty, a
+    // teal recycle arrow shows another pass through the waste is available.
     let sr = stock_rect();
     if g.stock.is_empty() {
         draw_empty_slot(c, sr);
         if !g.waste.is_empty() {
-            c.draw_text(sr.x + (CARD_W - 8) / 2, sr.y + (CARD_H - 8) / 2, "@", 1, gfx::TX3);
+            let rg = &glyphs::RECYCLE;
+            draw_glyph(
+                c,
+                sr.x + (CARD_W - rg.w) / 2,
+                sr.y + (CARD_H - rg.h) / 2,
+                rg,
+                gfx::ACC,
+            );
         }
     } else {
+        // Edge slivers behind the top card hint at the pile's depth.
+        let depth = ((g.stock.len() + 7) / 8).min(3) as i32;
+        for d in (1..=depth).rev() {
+            c.fill_rounded_rect(Rect::new(sr.x + 2 * d, sr.y + 2 * d, CARD_W, CARD_H), 8, CARD_BACK);
+            c.stroke_rounded_rect(
+                Rect::new(sr.x + 2 * d, sr.y + 2 * d, CARD_W, CARD_H),
+                8,
+                1,
+                with_alpha(gfx::ACC, 70),
+            );
+        }
         draw_card(c, sr.x, sr.y, Card { rank: 1, suit: Suit::Spades, face_up: false });
+        draw_count_badge(c, sr.x + CARD_W - 8, sr.y + CARD_H - 8, g.stock.len());
     }
 
     // Waste: top card (minus any dragged one).
@@ -252,7 +277,14 @@ pub fn draw_scene(c: &mut Canvas, g: &Game, drag: Option<&DragView>, status: &st
         let n = g.foundations[i].len() - hidden(Loc::Foundation(i), 1).min(g.foundations[i].len());
         if n == 0 {
             draw_empty_slot(c, fr);
-            c.draw_text(fr.x + (CARD_W - 8) / 2, fr.y + (CARD_H - 8) / 2, "A", 1, gfx::TX3);
+            let a = &glyphs::RANKS[0];
+            draw_glyph(
+                c,
+                fr.x + (CARD_W - a.w) / 2,
+                fr.y + (CARD_H - a.h) / 2,
+                a,
+                with_alpha(gfx::TX3, 150),
+            );
         } else {
             draw_card(c, fr.x, fr.y, g.foundations[i][n - 1]);
         }

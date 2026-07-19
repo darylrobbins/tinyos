@@ -5,6 +5,7 @@
 
 extern crate alloc;
 
+mod glyphs;
 mod view;
 
 use alloc::vec::Vec;
@@ -105,6 +106,9 @@ fn main(env: Env) -> i32 {
         Err(_) => return 1,
     };
     let (w, h) = (win.width as i32, win.height as i32);
+    // Render into a back buffer and present complete frames only; drawing
+    // straight into the shared surface flickers (the shell may blit mid-draw).
+    let mut back = alloc::vec![0u32; (w * h) as usize];
 
     let mut game = Game::new(uptime_us(), 1);
     let mut moves: u32 = 0;
@@ -146,7 +150,7 @@ fn main(env: Env) -> i32 {
 
         // Draw. During the win cascade the frame persists (card trails); in
         // play the scene redraws fully every frame.
-        let mut c = Canvas::new(win.pixels(), w, h);
+        let mut c = Canvas::new(&mut back, w, h);
         match anim.as_mut() {
             Some(a) => {
                 a.step(&mut c);
@@ -178,7 +182,7 @@ fn main(env: Env) -> i32 {
         if ui::button(&mut c, &ui_in, Rect::new(123, 8, 80, 26), draw_label) {
             toggle_draw = true;
         }
-        win.present();
+        win.present_from(&back);
 
         if new_game || toggle_draw {
             let dc = match (toggle_draw, game.draw_count) {
