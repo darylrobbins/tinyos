@@ -5,8 +5,7 @@
 
 pub const ABI_VERSION: u32 = 0;
 
-// Syscall numbers. 13-15 are reserved (process_spawn, thread_spawn,
-// memobj_unmap).
+// Syscall numbers. 13-14 are reserved (process_spawn, thread_spawn).
 pub const SYS_LOG: u64 = 0;
 pub const SYS_HANDLE_CLOSE: u64 = 1;
 pub const SYS_HANDLE_DUP: u64 = 2;
@@ -20,6 +19,8 @@ pub const SYS_MEMOBJ_SIZE: u64 = 9;
 pub const SYS_PROCESS_EXIT: u64 = 10;
 pub const SYS_CLOCK_UPTIME: u64 = 11;
 pub const SYS_ABI_VERSION: u64 = 12;
+/// Unmap a memobj mapping by the vaddr `memobj_map` returned.
+pub const SYS_MEMOBJ_UNMAP: u64 = 15;
 
 // Status codes.
 pub const ST_OK: u32 = 0;

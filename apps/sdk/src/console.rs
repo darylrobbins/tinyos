@@ -129,6 +129,7 @@ pub struct TextSurface {
     pub cols: u32,
     pub rows: u32,
     va: u64,
+    mem: u64,
 }
 
 impl Console {
@@ -144,7 +145,7 @@ impl Console {
         msg.extend_from_slice(&cols.to_le_bytes());
         msg.extend_from_slice(&rows.to_le_bytes());
         self.ch.send(&msg, &[dup])?;
-        Ok(TextSurface { ch: self.ch, cols, rows, va })
+        Ok(TextSurface { ch: self.ch, cols, rows, va, mem })
     }
 }
 
@@ -187,6 +188,16 @@ impl TextSurface {
     }
 }
 
+impl Drop for TextSurface {
+    fn drop(&mut self) {
+        // Reclaim the VA range and the handle; runs after close(), and also
+        // on silent replacement (resize re-open).
+        use crate::syscall::*;
+        syscall1(SYS_MEMOBJ_UNMAP, self.va);
+        syscall1(SYS_HANDLE_CLOSE, self.mem);
+    }
+}
+
 /// A bottom-pinned live cell region (console protocol LIVE_*): `WRITE`d
 /// lines keep scrolling above while the app redraws this area in place —
 /// the Ink-style static/dynamic split. On close (or exit) the terminal
@@ -196,6 +207,7 @@ pub struct LiveRegion {
     pub cols: u32,
     pub rows: u32,
     va: u64,
+    mem: u64,
 }
 
 impl Console {
@@ -215,7 +227,7 @@ impl Console {
         let mut msg = OP_LIVE_OPEN.to_le_bytes().to_vec();
         msg.extend_from_slice(&rows.to_le_bytes());
         self.ch.send(&msg, &[dup])?;
-        Ok(LiveRegion { ch: self.ch, cols, rows, va })
+        Ok(LiveRegion { ch: self.ch, cols, rows, va, mem })
     }
 }
 
@@ -241,6 +253,14 @@ impl LiveRegion {
     /// Close; the terminal flattens the last frame into scrollback.
     pub fn close(self) {
         let _ = self.ch.send(&OP_LIVE_CLOSE.to_le_bytes(), &[]);
+    }
+}
+
+impl Drop for LiveRegion {
+    fn drop(&mut self) {
+        use crate::syscall::*;
+        syscall1(SYS_MEMOBJ_UNMAP, self.va);
+        syscall1(SYS_HANDLE_CLOSE, self.mem);
     }
 }
 

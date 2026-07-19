@@ -41,6 +41,7 @@ pub struct MapFlags {
 struct Mapping {
     va: u64,
     len: u64,
+    pa: usize,
     flags: MapFlags,
 }
 
@@ -53,6 +54,8 @@ pub struct AddrSpace {
     owned: Vec<(usize, usize)>, // (PA, page_count) blocks freed on drop
     maps: Vec<Mapping>,       // for user-pointer validation
     bump: u64,
+    /// Reclaimed VA ranges (start, reserved_len) available for reuse.
+    va_free: Vec<(u64, u64)>,
 }
 
 static NEXT_ASID: AtomicU16 = AtomicU16::new(1);
@@ -76,6 +79,7 @@ impl AddrSpace {
             owned: Vec::new(),
             maps: Vec::new(),
             bump: DYN_BASE,
+            va_free: Vec::new(),
         })
     }
 
@@ -145,7 +149,7 @@ impl AddrSpace {
         if own {
             self.owned.push((pa, pages));
         }
-        self.maps.push(Mapping { va, len: (pages * FRAME_SIZE) as u64, flags });
+        self.maps.push(Mapping { va, len: (pages * FRAME_SIZE) as u64, pa, flags });
         unsafe { asm!("dsb ishst") };
         Some(())
     }
@@ -156,7 +160,7 @@ impl AddrSpace {
     pub fn map_page(&mut self, va: u64, pa: usize, flags: MapFlags) -> Option<()> {
         let e = self.entry(va)?;
         unsafe { e.write_volatile(Self::page_desc(pa, flags)) };
-        self.maps.push(Mapping { va, len: FRAME_SIZE as u64, flags });
+        self.maps.push(Mapping { va, len: FRAME_SIZE as u64, pa, flags });
         unsafe { asm!("dsb ishst") };
         Some(())
     }
@@ -172,11 +176,57 @@ impl AddrSpace {
     }
 
     /// Reserve a kernel-chosen VA range (page-aligned) for `len` bytes.
+    /// Reclaimed ranges are reused first-fit; otherwise the bump grows.
     pub fn alloc_va(&mut self, len: usize) -> u64 {
-        let va = self.bump;
         let pages = len.div_ceil(FRAME_SIZE) as u64;
-        self.bump += (pages + 1) * FRAME_SIZE as u64; // +1 guard page
+        let need = (pages + 1) * FRAME_SIZE as u64; // +1 guard page
+        if let Some(i) = self.va_free.iter().position(|(_, l)| *l >= need) {
+            let (start, avail) = self.va_free[i];
+            if avail == need {
+                self.va_free.swap_remove(i);
+            } else {
+                self.va_free[i] = (start + need, avail - need);
+            }
+            return start;
+        }
+        let va = self.bump;
+        self.bump += need;
         va
+    }
+
+    /// Unmap the memobj-backed mapping starting at `va`: clear its PTEs,
+    /// flush per page, drop the record, and recycle the VA range. Refuses
+    /// image/stack pages (frames owned by the address space). Returns the
+    /// mapping's (pa, len).
+    pub fn unmap(&mut self, va: u64) -> Option<(usize, u64)> {
+        let idx = self.maps.iter().position(|m| m.va == va)?;
+        let (pa, len) = (self.maps[idx].pa, self.maps[idx].len);
+        if self
+            .owned
+            .iter()
+            .any(|(opa, pages)| pa >= *opa && pa < opa + pages * FRAME_SIZE)
+        {
+            return None; // image/stack: dies with the address space only
+        }
+        let pages = len / FRAME_SIZE as u64;
+        for i in 0..pages {
+            let page_va = va + i * FRAME_SIZE as u64;
+            if let Some(e) = self.entry(page_va) {
+                unsafe { e.write_volatile(0) };
+                tlbi_page(self.asid, page_va);
+            }
+        }
+        unsafe { asm!("dsb ish", "isb") };
+        self.maps.swap_remove(idx);
+        self.va_free.push((va, len + FRAME_SIZE as u64)); // incl. guard page
+        Some((pa, len))
+    }
+
+    /// Does any current mapping reference the physical range [base, base+len)?
+    pub fn references_pa_range(&self, base: usize, len: usize) -> bool {
+        self.maps
+            .iter()
+            .any(|m| m.pa < base + len && base < m.pa + m.len as usize)
     }
 
     /// Tighten permissions on an existing mapping (e.g. make code RX->R).

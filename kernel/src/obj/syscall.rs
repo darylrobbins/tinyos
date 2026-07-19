@@ -27,7 +27,8 @@ pub use abi::syscall::{
     ST_LIMIT_EXCEEDED, ST_NOT_SUPPORTED, ST_NO_MEMORY, ST_OK, ST_PEER_CLOSED, ST_SHOULD_WAIT,
     ST_TIMED_OUT, ST_WRONG_TYPE, SYS_ABI_VERSION, SYS_CHANNEL_CREATE, SYS_CHANNEL_RECV,
     SYS_CHANNEL_SEND, SYS_CLOCK_UPTIME, SYS_HANDLE_CLOSE, SYS_HANDLE_DUP, SYS_LOG,
-    SYS_MEMOBJ_CREATE, SYS_MEMOBJ_MAP, SYS_MEMOBJ_SIZE, SYS_PROCESS_EXIT, SYS_WAIT_MANY,
+    SYS_MEMOBJ_CREATE, SYS_MEMOBJ_MAP, SYS_MEMOBJ_SIZE, SYS_MEMOBJ_UNMAP, SYS_PROCESS_EXIT,
+    SYS_WAIT_MANY,
 };
 
 const LOG_MAX: u64 = 4096;
@@ -47,6 +48,7 @@ pub fn dispatch(sysno: u64, args: [u64; 6]) -> (u32, u64) {
         SYS_MEMOBJ_CREATE => sys_memobj_create(args[0]),
         SYS_MEMOBJ_MAP => sys_memobj_map(args[0], args[1], args[2]),
         SYS_MEMOBJ_SIZE => sys_memobj_size(args[0]),
+        SYS_MEMOBJ_UNMAP => sys_memobj_unmap(args[0]),
         SYS_PROCESS_EXIT => exit_current(args[0] as u32 as i32),
         SYS_CLOCK_UPTIME => Ok(crate::arch::timer::uptime_us()),
         SYS_ABI_VERSION => Ok(ABI_VERSION as u64),
@@ -79,25 +81,29 @@ fn cur_proc() -> Result<Arc<Process>, u32> {
 
 // --- user memory access -----------------------------------------------------
 
-fn user_buf_ok(va: u64, len: u64, write: bool) -> bool {
-    let me = crate::sched::current();
-    match &me.aspace {
-        Some(a) => a.lock().user_buf_ok(va, len, write),
-        None => false,
-    }
-}
+// Validation and copy happen under one aspace lock hold: since memobj_unmap
+// exists, a validate-then-copy gap would let another mapping state race in.
+// (Processes are single-threaded today, but the invariant is now local
+// instead of resting on that.)
 
 fn copy_in(va: u64, len: u64) -> Result<Vec<u8>, u32> {
-    if !user_buf_ok(va, len, false) {
+    let me = crate::sched::current();
+    let a = me.aspace.as_ref().ok_or(ST_INVALID_ARGS)?;
+    let mut v = alloc::vec![0u8; len as usize];
+    let g = a.lock();
+    if !g.user_buf_ok(va, len, false) {
         return Err(ST_INVALID_ARGS);
     }
-    let mut v = alloc::vec![0u8; len as usize];
     unsafe { core::ptr::copy_nonoverlapping(va as *const u8, v.as_mut_ptr(), len as usize) };
+    drop(g);
     Ok(v)
 }
 
 fn copy_out(va: u64, bytes: &[u8]) -> Result<(), u32> {
-    if !user_buf_ok(va, bytes.len() as u64, true) {
+    let me = crate::sched::current();
+    let a = me.aspace.as_ref().ok_or(ST_INVALID_ARGS)?;
+    let g = a.lock();
+    if !g.user_buf_ok(va, bytes.len() as u64, true) {
         return Err(ST_INVALID_ARGS);
     }
     unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), va as *mut u8, bytes.len()) };
@@ -337,6 +343,25 @@ fn sys_memobj_map(hv: u64, offset: u64, len: u64) -> SysResult {
     };
     p.mapped.lock().push(m);
     Ok(va)
+}
+
+fn sys_memobj_unmap(va: u64) -> SysResult {
+    let p = cur_proc()?;
+    let (pa, len) = p.aspace.lock().unmap(va).ok_or(ST_INVALID_ARGS)?;
+    // Drop one keepalive Arc for this memobj if no mapping references it
+    // anymore (the same object may be mapped more than once).
+    let mut mapped = p.mapped.lock();
+    if let Some(i) = mapped
+        .iter()
+        .position(|m| pa >= m.pa() && pa < m.pa() + m.size().div_ceil(FRAME_SIZE) * FRAME_SIZE)
+    {
+        let (base, span) = (mapped[i].pa(), mapped[i].size().div_ceil(FRAME_SIZE) * FRAME_SIZE);
+        if !p.aspace.lock().references_pa_range(base, span) {
+            mapped.swap_remove(i);
+        }
+    }
+    let _ = len;
+    Ok(0)
 }
 
 fn sys_memobj_size(hv: u64) -> SysResult {
