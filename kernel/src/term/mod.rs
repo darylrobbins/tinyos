@@ -34,6 +34,9 @@ pub struct Terminal {
     cwd: String,
     /// A foreground app launched via `run`, if any.
     running: Option<RunningApp>,
+    /// Background apps (`run <name> &`): output interleaves into scrollback
+    /// prefixed with the app name; input stays with the shell/foreground.
+    bg_jobs: Vec<RunningApp>,
     /// An `edit <file>` request for the shell to open an editor window,
     /// as (cwd, path). Drained each frame by `Shell::pump_app_requests`.
     pending_edit: Option<(String, String)>,
@@ -44,6 +47,7 @@ pub struct Terminal {
 }
 
 struct RunningApp {
+    name: String,
     process: alloc::sync::Arc<crate::obj::process::Process>,
     thread_id: u32,
     console: alloc::sync::Arc<crate::obj::channel::ChannelEnd>,
@@ -107,6 +111,7 @@ impl Terminal {
             hist_idx: None,
             cwd: "/".to_string(),
             running: None,
+            bg_jobs: Vec::new(),
             pending_edit: None,
             pending_vi: None,
             rows: 24,
@@ -285,7 +290,8 @@ impl Terminal {
                     ("spin [n]", "spawn n busy threads on cores 1-3"),
                     ("ps", "list threads and processes"),
                     ("kill <id>", "stop a thread"),
-                    ("run <name>", "run an app from /apps"),
+                    ("run <name> [&]", "run an app from /apps (& = background)"),
+                    ("jobs", "list running apps"),
                     ("ls [path]", "list directory"),
                     ("cat <file>", "print file contents"),
                     ("edit <file>", "edit a file in a new window"),
@@ -522,6 +528,28 @@ impl Terminal {
                 Err(e) => self.out(format!("{name}: sync failed ({e}), aborting"), ERR),
             },
             "run" => self.run_app(rest.trim()),
+            "jobs" => {
+                let mut any = false;
+                if let Some(app) = &self.running {
+                    self.out(
+                        format!("{:>4}  {:<10} foreground", app.thread_id, app.name.clone()),
+                        FG,
+                    );
+                    any = true;
+                }
+                let rows: Vec<(u32, String)> = self
+                    .bg_jobs
+                    .iter()
+                    .map(|j| (j.thread_id, j.name.clone()))
+                    .collect();
+                for (tid, jname) in rows {
+                    self.out(format!("{tid:>4}  {jname:<10} background"), FG);
+                    any = true;
+                }
+                if !any {
+                    self.out("no running apps".to_string(), DIM);
+                }
+            }
             "usertest" => self.usertest(rest.trim()),
             "objtest" => {
                 for line in crate::obj::objtest::run() {
@@ -537,10 +565,15 @@ impl Terminal {
         }
     }
 
-    /// Load and run an app from /apps/<name> with argv.
+    /// Load and run an app from /apps/<name> with argv. A trailing `&`
+    /// runs it in the background (output prefixed, input stays here).
     fn run_app(&mut self, args: &str) {
-        if self.running.is_some() {
-            self.out("run: an app is already running".to_string(), ERR);
+        let (args, background) = match args.trim().strip_suffix('&') {
+            Some(rest) => (rest.trim(), true),
+            None => (args, false),
+        };
+        if !background && self.running.is_some() {
+            self.out("run: a foreground app is already running".to_string(), ERR);
             return;
         }
         let mut parts = args.split_whitespace();
@@ -571,7 +604,8 @@ impl Terminal {
                     // Hand the window channel to the shell: if the app opens a
                     // window, the shell hosts it. Console output stays here.
                     crate::ui::shell::extern_app::register(app.shell, name.to_string());
-                    self.running = Some(RunningApp {
+                    let job = RunningApp {
+                        name: name.to_string(),
                         process: app.process,
                         thread_id: app.thread_id,
                         console: app.console,
@@ -580,13 +614,85 @@ impl Terminal {
                         sent_size: (0, 0), // forces the initial OP_RESIZE
                         surface: None,
                         live: None,
-                    });
-                    // The shell prompt makes way for the app's own output;
-                    // restored when the app exits.
-                    self.view.set_prompt(Vec::new());
+                    };
+                    if background {
+                        self.bg_jobs.push(job);
+                    } else {
+                        self.running = Some(job);
+                        // The shell prompt makes way for the app's own
+                        // output; restored when the app exits.
+                        self.view.set_prompt(Vec::new());
+                    }
                 }
                 Err(e) => self.out(format!("run: {name}: {}", e.msg()), ERR),
             }
+        }
+    }
+
+    /// Drain background jobs: WRITE lines land in scrollback prefixed with
+    /// the app name; HELLO/RESIZE are answered; surface/live/input-mode
+    /// requests are ignored (only the foreground app owns the display).
+    fn pump_bg(&mut self) {
+        use abi::console::*;
+        let (cols, rows) = (self.view.cols, self.rows);
+        let mut lines: Vec<(String, u32)> = Vec::new();
+        let mut gone: Vec<u32> = Vec::new();
+        for app in self.bg_jobs.iter_mut() {
+            let mut replies: Vec<Vec<u8>> = Vec::new();
+            while let Ok(msg) = app.console.recv() {
+                if msg.bytes.len() < 4 {
+                    continue;
+                }
+                match u32::from_le_bytes(msg.bytes[0..4].try_into().unwrap()) {
+                    OP_WRITE => {
+                        if let Ok(s) = core::str::from_utf8(&msg.bytes[4..]) {
+                            for ch in s.chars() {
+                                if ch == '\n' {
+                                    let line = core::mem::take(&mut app.partial);
+                                    lines.push((format!("[{}] {line}", app.name), FG));
+                                } else {
+                                    app.partial.push(ch);
+                                }
+                            }
+                        }
+                    }
+                    OP_HELLO => {
+                        let mut b = OP_HELLO_ACK.to_le_bytes().to_vec();
+                        b.extend_from_slice(&1u32.to_le_bytes());
+                        b.extend_from_slice(&0u32.to_le_bytes());
+                        replies.push(b);
+                    }
+                    _ => {}
+                }
+            }
+            if app.sent_size != (cols, rows) {
+                app.sent_size = (cols, rows);
+                let mut b = OP_RESIZE.to_le_bytes().to_vec();
+                b.extend_from_slice(&(cols as u32).to_le_bytes());
+                b.extend_from_slice(&(rows as u32).to_le_bytes());
+                replies.push(b);
+            }
+            for b in replies {
+                let _ = app.console.send(crate::obj::channel::Message {
+                    bytes: b,
+                    handles: Vec::new(),
+                });
+            }
+            if let Some(code) = app.process.exited() {
+                if !app.partial.is_empty() {
+                    let line = core::mem::take(&mut app.partial);
+                    lines.push((format!("[{}] {line}", app.name), FG));
+                }
+                lines.push((
+                    format!("[{}] exited (code {code})", app.name),
+                    DIM,
+                ));
+                gone.push(app.thread_id);
+            }
+        }
+        self.bg_jobs.retain(|j| !gone.contains(&j.thread_id));
+        for (line, color) in lines {
+            self.out(line, color);
         }
     }
 
@@ -594,6 +700,7 @@ impl Terminal {
     /// detect its exit. Called each frame from the hosting card.
     pub fn pump(&mut self) {
         use abi::console::*;
+        self.pump_bg();
         let (cols, rows) = (self.view.cols, self.rows);
         let Some(app) = &mut self.running else { return };
         let mut lines: Vec<(String, u32)> = Vec::new();
