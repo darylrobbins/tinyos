@@ -55,6 +55,45 @@ struct RunningApp {
     input_mode: u32,
     /// Last (cols, rows) sent as OP_RESIZE; (0, 0) forces the initial send.
     sent_size: (usize, usize),
+    /// Full-screen text surface, when the app has one open.
+    surface: Option<AppSurface>,
+}
+
+/// A hosted full-screen cell surface (console protocol SURFACE_*). The cell
+/// data is snapshotted from the app's MemObj on PRESENT — the address comes
+/// from the kernel-side object, never from message contents — so the display
+/// is tear-free and the app can't point the terminal at arbitrary memory.
+struct AppSurface {
+    mem: alloc::sync::Arc<crate::obj::memobj::MemObj>,
+    cols: usize,
+    rows: usize,
+    cells: Vec<abi::console::Cell>,
+    /// (row, col, shape, visible) from OP_SURFACE_CURSOR.
+    cursor: (usize, usize, u32, bool),
+}
+
+impl AppSurface {
+    /// Copy the damage rect from the app's shared memory into the snapshot.
+    fn snap(&mut self, x: usize, y: usize, w: usize, h: usize) {
+        let bytes = unsafe {
+            core::slice::from_raw_parts(self.mem.pa() as *const u8, self.mem.size())
+        };
+        let (x1, y1) = ((x + w).min(self.cols), (y + h).min(self.rows));
+        for row in y.min(self.rows)..y1 {
+            for col in x.min(self.cols)..x1 {
+                let i = row * self.cols + col;
+                let o = i * 16;
+                let f = |o: usize| u32::from_le_bytes(bytes[o..o + 4].try_into().unwrap());
+                self.cells[i] = abi::console::Cell {
+                    glyph: f(o),
+                    fg: f(o + 4),
+                    bg: f(o + 8),
+                    attrs: u16::from_le_bytes(bytes[o + 12..o + 14].try_into().unwrap()),
+                    _pad: 0,
+                };
+            }
+        }
+    }
 }
 
 impl Terminal {
@@ -138,8 +177,13 @@ impl Terminal {
     /// editing + OP_INPUT_LINE on Enter in LINES mode.
     fn app_char(&mut self, c: char) {
         use abi::console::{INPUT_MODE_KEYS, OP_CHAR, OP_INPUT_LINE};
-        let mode = self.running.as_ref().map(|a| a.input_mode).unwrap_or(0);
-        if mode == INPUT_MODE_KEYS {
+        // An open surface implies raw input regardless of the stored mode.
+        let raw = self
+            .running
+            .as_ref()
+            .map(|a| a.input_mode == INPUT_MODE_KEYS || a.surface.is_some())
+            .unwrap_or(false);
+        if raw {
             let mut b = OP_CHAR.to_le_bytes().to_vec();
             b.extend_from_slice(&(c as u32).to_le_bytes());
             self.send_app(b);
@@ -164,8 +208,12 @@ impl Terminal {
     /// edges here, so KEYS mode reports down=1 for every event.
     fn app_key(&mut self, code: u16) {
         use abi::console::{INPUT_MODE_KEYS, OP_KEY};
-        let mode = self.running.as_ref().map(|a| a.input_mode).unwrap_or(0);
-        if mode == INPUT_MODE_KEYS {
+        let raw = self
+            .running
+            .as_ref()
+            .map(|a| a.input_mode == INPUT_MODE_KEYS || a.surface.is_some())
+            .unwrap_or(false);
+        if raw {
             let mut b = OP_KEY.to_le_bytes().to_vec();
             b.extend_from_slice(&code.to_le_bytes());
             b.push(1); // down
@@ -524,6 +572,7 @@ impl Terminal {
                         partial: String::new(),
                         input_mode: abi::console::INPUT_MODE_LINES,
                         sent_size: (0, 0), // forces the initial OP_RESIZE
+                        surface: None,
                     });
                     // The shell prompt makes way for the app's own output;
                     // restored when the app exits.
@@ -570,6 +619,51 @@ impl Terminal {
                     app.input_mode =
                         u32::from_le_bytes(msg.bytes[4..8].try_into().unwrap());
                 }
+                OP_SURFACE_OPEN if msg.bytes.len() >= 12 => {
+                    let scols = u32::from_le_bytes(msg.bytes[4..8].try_into().unwrap()) as usize;
+                    let srows = u32::from_le_bytes(msg.bytes[8..12].try_into().unwrap()) as usize;
+                    // The surface rides as the first moved MemObj handle; its
+                    // address/size come from the kernel object only.
+                    let mem = msg.handles.iter().find_map(|h| match &h.object {
+                        crate::obj::Object::MemObj(m) => Some(m.clone()),
+                        _ => None,
+                    });
+                    if let Some(mem) = mem {
+                        let ok = (1..=1000).contains(&scols)
+                            && (1..=500).contains(&srows)
+                            && mem.size() >= scols * srows * 16;
+                        if ok {
+                            let mut s = AppSurface {
+                                mem,
+                                cols: scols,
+                                rows: srows,
+                                cells: alloc::vec![abi::console::Cell::default(); scols * srows],
+                                cursor: (0, 0, 0, false),
+                            };
+                            s.snap(0, 0, scols, srows);
+                            app.surface = Some(s);
+                            // Spec: RESIZE is (re)sent after any open.
+                            app.sent_size = (0, 0);
+                        }
+                    }
+                }
+                OP_SURFACE_PRESENT if msg.bytes.len() >= 20 => {
+                    if let Some(s) = &mut app.surface {
+                        let f = |o: usize| {
+                            u32::from_le_bytes(msg.bytes[o..o + 4].try_into().unwrap()) as usize
+                        };
+                        s.snap(f(4), f(8), f(12), f(16));
+                    }
+                }
+                OP_SURFACE_CURSOR if msg.bytes.len() >= 20 => {
+                    if let Some(s) = &mut app.surface {
+                        let f = |o: usize| {
+                            u32::from_le_bytes(msg.bytes[o..o + 4].try_into().unwrap())
+                        };
+                        s.cursor = (f(4) as usize, f(8) as usize, f(12), f(16) != 0);
+                    }
+                }
+                OP_SURFACE_CLOSE => app.surface = None,
                 _ => {}
             }
         }
@@ -631,7 +725,75 @@ impl Terminal {
         rows: usize,
         now_ms: u64,
     ) {
+        if let Some(s) = self.running.as_ref().and_then(|a| a.surface.as_ref()) {
+            return draw_cells(s, surface, fonts, ox, oy, self.view.cols, rows, now_ms);
+        }
         self.view.draw(surface, fonts, ox, oy, rows, now_ms, true);
+    }
+}
+
+/// Render a hosted cell surface. Colors with a zero alpha byte take the
+/// terminal theme defaults; INVERSE swaps fg/bg; DIM halves the fg;
+/// UNDERLINE draws a baseline rule. WIDE glyphs draw once and their
+/// continuation cell is skipped.
+fn draw_cells(
+    s: &AppSurface,
+    out: &mut Surface,
+    fonts: &mut Fonts,
+    ox: i32,
+    oy: i32,
+    cols: usize,
+    rows: usize,
+    now_ms: u64,
+) {
+    use abi::console::*;
+    const FONT_PX: f32 = 15.0;
+    const DEFAULT_BG: u32 = rgb(0x07, 0x09, 0x0d);
+    let dim = |c: u32| (c >> 1) & 0x007F_7F7F | 0xFF00_0000;
+
+    for row in 0..rows.min(s.rows) {
+        let y = oy + row as i32 * CELL_H;
+        for col in 0..cols.min(s.cols) {
+            let cell = s.cells[row * s.cols + col];
+            if cell.attrs & ATTR_WIDE_CONT != 0 {
+                continue;
+            }
+            let x = ox + col as i32 * CELL_W;
+            let mut fg = if cell.fg >> 24 == 0 { FG } else { cell.fg };
+            let mut bg = if cell.bg >> 24 == 0 { None } else { Some(cell.bg) };
+            if cell.attrs & ATTR_INVERSE != 0 {
+                let old_fg = fg;
+                fg = bg.unwrap_or(DEFAULT_BG);
+                bg = Some(old_fg);
+            }
+            if cell.attrs & ATTR_DIM != 0 {
+                fg = dim(fg);
+            }
+            let w = if cell.attrs & ATTR_WIDE != 0 { 2 } else { 1 };
+            if let Some(b) = bg {
+                out.fill_rect(x, y, CELL_W * w, CELL_H, b);
+            }
+            if let Some(c) = char::from_u32(cell.glyph).filter(|c| !c.is_whitespace() && *c != '\0')
+            {
+                let mut buf = [0u8; 4];
+                fonts.mono.draw(out, c.encode_utf8(&mut buf), FONT_PX, x, y, fg);
+            }
+            if cell.attrs & ATTR_UNDERLINE != 0 {
+                out.fill_rect(x, y + CELL_H - 3, CELL_W * w, 1, fg);
+            }
+        }
+    }
+
+    // Cursor, on the shared caret blink cadence.
+    let (crow, ccol, shape, visible) = s.cursor;
+    if visible && crow < rows.min(s.rows) && ccol < cols.min(s.cols) && crate::ui::shell::caret_on(now_ms)
+    {
+        let (x, y) = (ox + ccol as i32 * CELL_W, oy + crow as i32 * CELL_H);
+        match shape {
+            CURSOR_BAR => out.fill_rect(x, y + 1, 2, CELL_H - 2, ACCENT),
+            CURSOR_UNDERLINE => out.fill_rect(x, y + CELL_H - 3, CELL_W, 2, ACCENT),
+            _ => out.fill_rect(x, y + 1, CELL_W, CELL_H - 2, ACCENT),
+        }
     }
 }
 

@@ -70,6 +70,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "textui"
+version = "0.1.0"
+dependencies = [
+ "tinyos-abi",
+]
+
+[[package]]
 name = "tinyos-abi"
 version = "0.1.0"
 
@@ -80,4 +87,13 @@ dependencies = [
  "libm",
  "linked_list_allocator",
  "tinyos-abi",
+]
+
+[[package]]
+name = "tui"
+version = "0.1.0"
+dependencies = [
+ "textui",
+ "tinyos-abi",
+ "tinyos-app",
 ]

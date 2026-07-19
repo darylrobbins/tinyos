@@ -120,6 +120,73 @@ pub fn read_line() -> Option<String> {
     crate::entry::console()?.read_line()
 }
 
+/// A full-screen cell surface hosted by the terminal (console protocol
+/// SURFACE_*): shared-memory cells, damage-tracked presents, cursor control.
+/// While open, the terminal delivers raw Char/Key events and freezes
+/// scrollback underneath (alt-screen semantics).
+pub struct TextSurface {
+    ch: Channel,
+    pub cols: u32,
+    pub rows: u32,
+    va: u64,
+}
+
+impl Console {
+    /// Open a `cols` x `rows` surface. Size it from a Resize event ([`Console::size`]).
+    pub fn open_surface(&mut self, cols: u32, rows: u32) -> Result<TextSurface, u32> {
+        use crate::syscall::*;
+        let bytes = cols as u64 * rows as u64 * 16;
+        let size = (bytes + 0xFFF) & !0xFFF;
+        let mem = syscall1(SYS_MEMOBJ_CREATE, size).ok()?;
+        let dup = syscall2(SYS_HANDLE_DUP, mem, RIGHTS_ALL as u64).ok()? as u32;
+        let va = syscall3(SYS_MEMOBJ_MAP, mem, 0, size).ok()?;
+        let mut msg = OP_SURFACE_OPEN.to_le_bytes().to_vec();
+        msg.extend_from_slice(&cols.to_le_bytes());
+        msg.extend_from_slice(&rows.to_le_bytes());
+        self.ch.send(&msg, &[dup])?;
+        Ok(TextSurface { ch: self.ch, cols, rows, va })
+    }
+}
+
+impl TextSurface {
+    /// The shared cell grid (row-major, stride = cols).
+    pub fn cells(&mut self) -> &mut [Cell] {
+        unsafe {
+            core::slice::from_raw_parts_mut(
+                self.va as *mut Cell,
+                (self.cols * self.rows) as usize,
+            )
+        }
+    }
+
+    /// Present a damage rect (in cells).
+    pub fn present(&self, x: u32, y: u32, w: u32, h: u32) {
+        let mut msg = OP_SURFACE_PRESENT.to_le_bytes().to_vec();
+        for v in [x, y, w, h] {
+            msg.extend_from_slice(&v.to_le_bytes());
+        }
+        let _ = self.ch.send(&msg, &[]);
+    }
+
+    pub fn present_all(&self) {
+        self.present(0, 0, self.cols, self.rows);
+    }
+
+    /// Place the terminal cursor (CURSOR_* shapes; visible = false hides it).
+    pub fn set_cursor(&self, row: u32, col: u32, shape: u32, visible: bool) {
+        let mut msg = OP_SURFACE_CURSOR.to_le_bytes().to_vec();
+        for v in [row, col, shape, visible as u32] {
+            msg.extend_from_slice(&v.to_le_bytes());
+        }
+        let _ = self.ch.send(&msg, &[]);
+    }
+
+    /// Close the surface; the terminal restores scrollback.
+    pub fn close(self) {
+        let _ = self.ch.send(&OP_SURFACE_CLOSE.to_le_bytes(), &[]);
+    }
+}
+
 impl Write for Console {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         self.write_bytes(s.as_bytes());
