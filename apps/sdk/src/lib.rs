@@ -20,6 +20,7 @@ pub mod console;
 pub mod entry;
 pub mod fs;
 pub mod proc;
+pub mod process;
 mod font8x8;
 pub mod gfx;
 pub mod syscall;

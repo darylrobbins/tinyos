@@ -14,11 +14,13 @@ use crate::syscall::*;
 /// Bootstrap grant tags (from the shared abi crate).
 pub use abi::bootstrap::{TAG_CONSOLE, TAG_FS, TAG_PROC, TAG_SHELL};
 
-/// Everything an app receives at startup.
+/// Everything an app receives at startup. Channel(0) = grant absent.
 pub struct Env {
     pub args: Vec<String>,
     pub console: Channel,
     pub shell: Channel,
+    pub fs: Channel,
+    pub proc: Channel,
 }
 
 use abi::bootstrap::MAIN_CHANNEL;
@@ -71,7 +73,7 @@ fn parse_bootstrap(msg: &Msg) -> Env {
     if proc.0 != 0 {
         crate::proc::set_client(proc);
     }
-    Env { args, console, shell }
+    Env { args, console, shell, fs, proc }
 }
 
 /// Called by the `app!`-generated `_start`. Never returns.
@@ -79,7 +81,13 @@ pub fn run(main: fn(Env) -> i32) -> ! {
     crate::alloc_impl::init();
     let env = match Channel(MAIN_CHANNEL).recv() {
         Ok(msg) => parse_bootstrap(&msg),
-        Err(_) => Env { args: Vec::new(), console: Channel(0), shell: Channel(0) },
+        Err(_) => Env {
+            args: Vec::new(),
+            console: Channel(0),
+            shell: Channel(0),
+            fs: Channel(0),
+            proc: Channel(0),
+        },
     };
     unsafe {
         CONSOLE = Some(Console::new(env.console));
