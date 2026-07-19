@@ -177,9 +177,7 @@ fn ui_thread_main() {
         }
 
         deadline = shell.next_deadline(now);
-        // Interim until wait queues land: let peers run, then sleep.
-        sched::yield_now();
-        arch::irq::sleep_until(deadline);
+        sched::waitq::INPUT.block_current(deadline);
     }
 }
 

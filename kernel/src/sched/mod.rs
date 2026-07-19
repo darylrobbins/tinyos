@@ -3,6 +3,7 @@
 //! module (they only set atomics that drain_wakes() consumes).
 
 pub mod thread;
+pub mod waitq;
 
 use alloc::collections::VecDeque;
 use alloc::string::String;
@@ -26,6 +27,7 @@ pub(crate) enum Handoff {
     None,
     Requeue(Arc<Thread>),
     Drop(Arc<Thread>),
+    Wait(&'static waitq::WaitQueue, Arc<Thread>),
 }
 
 struct CpuSlot {
@@ -116,8 +118,14 @@ pub fn snapshot() -> Vec<ThreadInfo> {
 }
 
 /// Move IRQ-flagged and deadline-expired sleepers to the ready queue.
-/// (Filled in by the wait-queue task.)
-fn drain_wakes() {}
+fn drain_wakes() {
+    waitq::drain(arch::timer::uptime_us());
+}
+
+/// Block the calling thread for `us` microseconds.
+pub fn sleep_us(us: u64) {
+    waitq::TIMER.block_current(arch::timer::uptime_us() + us);
+}
 
 fn pick_next(cpu: usize) -> Option<Arc<Thread>> {
     let mut q = READY.lock();
@@ -189,6 +197,7 @@ fn finish_switch() {
             READY.lock().push_back(t);
         }
         Handoff::Drop(t) => drop(t), // last Arc frees TCB + stack (not ours)
+        Handoff::Wait(q, t) => q.enqueue_waiter(t),
     }
 }
 
@@ -199,18 +208,23 @@ extern "C" fn rust_thread_start(entry: fn()) -> ! {
     exit()
 }
 
-/// Deadline the idle loop may sleep to. The wait-queue task folds in
-/// blocked-thread deadlines; until then a coarse 500 ms tick keeps the CPU
-/// responsive to newly spawned threads.
+/// Deadline the idle loop may sleep to: the earliest blocked-thread wake,
+/// else a minute-scale deep-idle tick.
 fn idle_deadline() -> u64 {
-    arch::timer::uptime_us() + 500_000
+    let dl = waitq::earliest_deadline();
+    if dl != u64::MAX {
+        dl
+    } else {
+        arch::timer::uptime_us() + 60_000_000
+    }
 }
 
 fn idle_loop(cpu: usize) -> ! {
     let _ = cpu;
     loop {
-        arch::irq::sleep_until(idle_deadline());
+        // Run anything runnable first; sleep only when the queue is empty.
         yield_now();
+        arch::irq::idle_once(idle_deadline());
     }
 }
 

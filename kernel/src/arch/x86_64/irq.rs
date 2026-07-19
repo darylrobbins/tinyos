@@ -50,23 +50,32 @@ pub fn init() {
     WINDOW_START_US[0].store(super::timer::uptime_us(), Ordering::Relaxed);
 }
 
-pub fn sleep_until(deadline_us: u64) {
+/// Per-CPU reschedule hints, set by the IPI handler.
+pub static RESCHED: [AtomicBool; N] = [const { AtomicBool::new(false) }; N];
+
+/// One idle wait: sleep until `deadline_us`, an input IRQ, or an IPI —
+/// then return so the scheduler can re-examine the ready queue.
+///
+/// Race-freedom: flags are checked with IF clear; `sti` takes effect after
+/// the following instruction, so an IRQ arriving between the check and the
+/// `hlt` is delivered during the hlt and wakes it.
+pub fn idle_once(deadline_us: u64) {
     let cpu = super::cpu_id();
-    loop {
-        let now = super::timer::uptime_us();
-        if now >= deadline_us || WAKE_INPUT.swap(false, Ordering::Acquire) {
-            break;
-        }
-        apic::set_timer_us(deadline_us);
-        unsafe {
-            // sti takes effect after the next instruction, so no wake can
-            // be lost between sti and hlt.
-            asm!("sti", "hlt", "cli");
-        }
-        let woke = super::timer::uptime_us();
-        SLEPT_US[cpu].fetch_add(woke - now, Ordering::Relaxed);
-        WAKES[cpu].fetch_add(1, Ordering::Relaxed);
+    let now = super::timer::uptime_us();
+    if now >= deadline_us
+        || WAKE_INPUT.load(Ordering::Acquire)
+        || RESCHED[cpu].swap(false, Ordering::Acquire)
+    {
+        note_busy(cpu);
+        return;
     }
+    apic::set_timer_us(deadline_us);
+    unsafe {
+        asm!("sti", "hlt", "cli");
+    }
+    let woke = super::timer::uptime_us();
+    SLEPT_US[cpu].fetch_add(woke - now, Ordering::Relaxed);
+    WAKES[cpu].fetch_add(1, Ordering::Relaxed);
     apic::clear_timer();
     note_busy(cpu);
 }

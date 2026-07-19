@@ -31,26 +31,34 @@ pub fn init() {
     WINDOW_START_US[0].store(timer::uptime_us(), Ordering::Relaxed);
 }
 
-/// Sleep until `deadline_us` or an input interrupt, whichever is first.
-/// IRQs are taken only while waiting inside `wfi`.
-pub fn sleep_until(deadline_us: u64) {
+/// Per-CPU reschedule hints, set by the IPI handler.
+pub static RESCHED: [AtomicBool; N] = [const { AtomicBool::new(false) }; N];
+
+/// One idle wait: sleep until `deadline_us`, an input IRQ, or an IPI —
+/// then return so the scheduler can re-examine the ready queue.
+///
+/// Race-freedom: flags are checked with IRQs MASKED, and `wfi` executes
+/// still masked — the architecture wakes wfi on a pending-but-masked
+/// interrupt, so an IRQ landing between the check and the wfi cannot be
+/// lost. Handlers then run in a brief unmask window after the wake.
+pub fn idle_once(deadline_us: u64) {
     let cpu = super::cpu_id();
-    loop {
-        let now = timer::uptime_us();
-        if now >= deadline_us || WAKE_INPUT.swap(false, Ordering::Acquire) {
-            break;
-        }
-        timer::set_timer_us(deadline_us);
-        unsafe {
-            // Unmask IRQs just for the wait; handler runs, then we re-mask.
-            asm!("msr daifclr, #2");
-            asm!("wfi");
-            asm!("msr daifset, #2");
-        }
-        let woke = timer::uptime_us();
-        SLEPT_US[cpu].fetch_add(woke - now, Ordering::Relaxed);
-        WAKES[cpu].fetch_add(1, Ordering::Relaxed);
+    let now = timer::uptime_us();
+    if now >= deadline_us
+        || WAKE_INPUT.load(Ordering::Acquire)
+        || RESCHED[cpu].swap(false, Ordering::Acquire)
+    {
+        note_busy(cpu);
+        return;
     }
+    timer::set_timer_us(deadline_us);
+    unsafe {
+        asm!("wfi"); // masked; pending IRQ still wakes
+        asm!("msr daifclr, #2", "isb", "msr daifset, #2"); // service handlers
+    }
+    let woke = timer::uptime_us();
+    SLEPT_US[cpu].fetch_add(woke - now, Ordering::Relaxed);
+    WAKES[cpu].fetch_add(1, Ordering::Relaxed);
     timer::clear_timer();
     note_busy(cpu);
 }
