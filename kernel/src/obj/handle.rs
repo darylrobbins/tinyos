@@ -7,13 +7,9 @@ use alloc::vec::Vec;
 use super::Object;
 use super::syscall::{ST_ACCESS_DENIED, ST_BAD_HANDLE, ST_LIMIT_EXCEEDED};
 
-pub const RIGHT_READ: u32 = 1;
-pub const RIGHT_WRITE: u32 = 2;
-pub const RIGHT_DUP: u32 = 4;
-pub const RIGHT_TRANSFER: u32 = 8;
-pub const RIGHT_MAP: u32 = 16;
-pub const RIGHT_WAIT: u32 = 32;
-pub const RIGHTS_ALL: u32 = 0x3F;
+pub use abi::syscall::{
+    RIGHT_DUP, RIGHT_MAP, RIGHT_READ, RIGHT_TRANSFER, RIGHT_WAIT, RIGHT_WRITE, RIGHTS_ALL,
+};
 
 const MAX_HANDLES: usize = 256;
 

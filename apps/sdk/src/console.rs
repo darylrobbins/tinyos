@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 
 use crate::channel::Channel;
 
-const OP_WRITE: u32 = 1;
+use abi::console::OP_WRITE;
 
 pub struct Console {
     ch: Channel,

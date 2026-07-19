@@ -181,8 +181,7 @@ pub struct SpawnedApp {
 }
 
 /// Bootstrap grant tags (also known to the SDK).
-pub const TAG_CONSOLE: u32 = 1;
-pub const TAG_SHELL: u32 = 2;
+pub use abi::bootstrap::{TAG_CONSOLE, TAG_SHELL};
 
 /// Build the bootstrap record: abi, argv, grant tags. Handles ride the msg.
 fn bootstrap_record(argv: &[String], tags: &[u32]) -> Vec<u8> {

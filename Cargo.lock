@@ -69,6 +69,7 @@ dependencies = [
  "log",
  "spin",
  "tinyfs",
+ "tinyos-abi",
  "uefi",
  "vicore",
 ]
@@ -185,6 +186,10 @@ dependencies = [
 
 [[package]]
 name = "tinyfs"
+version = "0.1.0"
+
+[[package]]
+name = "tinyos-abi"
 version = "0.1.0"
 
 [[package]]

@@ -23,14 +23,9 @@ use crate::obj::syscall::ST_SHOULD_WAIT;
 use crate::obj::Object;
 
 // Window protocol opcodes — mirror apps/sdk/src/window.rs.
-const OP_OPEN: u32 = 1;
-const OP_OPENED: u32 = 2;
-const OP_PRESENT: u32 = 3;
-const OP_CHAR: u32 = 16;
-const OP_KEY: u32 = 17;
-const OP_CLOSE_REQ: u32 = 18;
-const OP_POINTER: u32 = 19;
-const OP_BUTTON: u32 = 20;
+use abi::window::{
+    OP_BUTTON, OP_CHAR, OP_CLOSE_REQ, OP_KEY, OP_OPEN, OP_OPENED, OP_POINTER, OP_PRESENT,
+};
 
 /// A spawned userspace process that may open a window. Handed from the
 /// terminal to the shell via `SPAWN_QUEUE`.

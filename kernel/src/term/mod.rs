@@ -460,7 +460,7 @@ impl Terminal {
     /// frame from the hosting card.
     pub fn pump(&mut self) {
         let Some(app) = &mut self.running else { return };
-        const OP_WRITE: u32 = 1;
+        use abi::console::OP_WRITE;
         let mut lines: Vec<(String, u32)> = Vec::new();
         // Drain all queued console messages.
         while let Ok(msg) = app.console.recv() {

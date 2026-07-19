@@ -71,7 +71,9 @@ kernel/src/
   gfx/           software surface, blending, blur, fontdue glyph cache
   ui/            splash, wallpaper, desktop shell, cursor
   term/          terminal widget + built-in shell
-tinyfs/          the filesystem itself: no_std core, host-testable
+crates/abi/      shared ABI: syscall numbers, protocols, design tokens
+crates/tinyfs/   the filesystem itself: no_std core, host-testable
+crates/vicore/   vi editor core: no_std, host-testable
 tools/mkfs-tinyfs/  host tool: create/populate/inspect/check disk images
 ```
 

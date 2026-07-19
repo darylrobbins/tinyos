@@ -12,11 +12,8 @@ pub mod usertest;
 
 use alloc::sync::Arc;
 
-// Signal bits (ABI).
-pub const SIG_READABLE: u32 = 1;
-pub const SIG_WRITABLE: u32 = 2;
-pub const SIG_PEER_CLOSED: u32 = 4;
-pub const SIG_EXITED: u32 = 8;
+// Signal bits (ABI; defined in the shared abi crate).
+pub use abi::syscall::{SIG_EXITED, SIG_PEER_CLOSED, SIG_READABLE, SIG_WRITABLE};
 
 /// Every kernel object a handle can reference.
 #[derive(Clone)]

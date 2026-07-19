@@ -6,3 +6,4 @@ edition = "2021"
 [dependencies]
 linked_list_allocator = "0.10"
 libm = "0.2"
+abi = { package = "tinyos-abi", path = "../../crates/abi" }

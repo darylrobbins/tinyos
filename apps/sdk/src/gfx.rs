@@ -6,27 +6,9 @@
 use crate::font8x8::{FONT8X8, GLYPH_H, GLYPH_W};
 use crate::uifont;
 
-// Meridian design tokens the SDK re-exports for app use. Values mirror
-// `kernel/src/ui/shell/tokens.rs` (source of truth:
-// docs/reference/meridian-os.html); userspace cannot see kernel code.
-pub const BG: u32 = rgb(0x07, 0x09, 0x0d);
-pub const TX: u32 = rgb(0xe8, 0xec, 0xf2);
-pub const TX2: u32 = rgb(0x9a, 0xa4, 0xb5);
-pub const TX3: u32 = rgb(0x5f, 0x68, 0x79);
-pub const ACC: u32 = rgb(0x5f, 0xd4, 0xc4);
-pub const HUE_RED: u32 = rgb(0xff, 0x9e, 0x9e);
-pub const CARD: u32 = argb(11, 0xff, 0xff, 0xff); // white @ .045
-pub const CARD2: u32 = argb(20, 0xff, 0xff, 0xff); // white @ .08
-pub const STROKE: u32 = argb(23, 0xff, 0xff, 0xff); // white @ .09
-pub const STROKE2: u32 = argb(41, 0xff, 0xff, 0xff); // white @ .16
-
-pub const fn argb(a: u8, r: u8, g: u8, b: u8) -> u32 {
-    (a as u32) << 24 | (r as u32) << 16 | (g as u32) << 8 | b as u32
-}
-
-pub const fn rgb(r: u8, g: u8, b: u8) -> u32 {
-    argb(255, r, g, b)
-}
+// Meridian design tokens and color helpers, from the shared abi crate — the
+// same definitions the kernel compositor uses, so they cannot drift.
+pub use abi::tokens::*;
 
 pub fn with_alpha(color: u32, a: u8) -> u32 {
     let scaled = ((color >> 24) * a as u32 / 255) << 24;

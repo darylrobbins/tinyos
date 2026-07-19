@@ -11,9 +11,8 @@ use crate::channel::{Channel, Msg};
 use crate::console::Console;
 use crate::syscall::*;
 
-/// Bootstrap grant tags.
-pub const TAG_CONSOLE: u32 = 1;
-pub const TAG_SHELL: u32 = 2;
+/// Bootstrap grant tags (from the shared abi crate).
+pub use abi::bootstrap::{TAG_CONSOLE, TAG_SHELL};
 
 /// Everything an app receives at startup.
 pub struct Env {
@@ -22,8 +21,7 @@ pub struct Env {
     pub shell: Channel,
 }
 
-// The main channel handle is always 1 (the loader installs it first).
-const MAIN_CHANNEL: u32 = 1;
+use abi::bootstrap::MAIN_CHANNEL;
 
 static mut CONSOLE: Option<Console> = None;
 

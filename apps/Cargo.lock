@@ -63,9 +63,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tinyos-abi"
+version = "0.1.0"
+
+[[package]]
 name = "tinyos-app"
 version = "0.1.0"
 dependencies = [
  "libm",
  "linked_list_allocator",
+ "tinyos-abi",
 ]

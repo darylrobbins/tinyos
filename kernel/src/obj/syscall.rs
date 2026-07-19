@@ -20,36 +20,15 @@ use super::Object;
 use crate::arch::paging::MapFlags;
 use crate::mem::frames::FRAME_SIZE;
 
-pub const ABI_VERSION: u64 = 0;
-
-// Status codes (kept in sync with the design spec and the SDK).
-pub const ST_OK: u32 = 0;
-pub const ST_BAD_HANDLE: u32 = 1;
-pub const ST_WRONG_TYPE: u32 = 2;
-pub const ST_ACCESS_DENIED: u32 = 3;
-pub const ST_INVALID_ARGS: u32 = 4;
-pub const ST_PEER_CLOSED: u32 = 5;
-pub const ST_SHOULD_WAIT: u32 = 6;
-pub const ST_TIMED_OUT: u32 = 7;
-pub const ST_NO_MEMORY: u32 = 8;
-pub const ST_BUFFER_TOO_SMALL: u32 = 9;
-pub const ST_LIMIT_EXCEEDED: u32 = 10;
-pub const ST_NOT_SUPPORTED: u32 = 11;
-pub const ST_KILLED: u32 = 12;
-
-pub const SYS_LOG: u64 = 0;
-pub const SYS_HANDLE_CLOSE: u64 = 1;
-pub const SYS_HANDLE_DUP: u64 = 2;
-pub const SYS_CHANNEL_CREATE: u64 = 3;
-pub const SYS_CHANNEL_SEND: u64 = 4;
-pub const SYS_CHANNEL_RECV: u64 = 5;
-pub const SYS_WAIT_MANY: u64 = 6;
-pub const SYS_MEMOBJ_CREATE: u64 = 7;
-pub const SYS_MEMOBJ_MAP: u64 = 8;
-pub const SYS_MEMOBJ_SIZE: u64 = 9;
-pub const SYS_PROCESS_EXIT: u64 = 10;
-pub const SYS_CLOCK_UPTIME: u64 = 11;
-pub const SYS_ABI_VERSION: u64 = 12;
+// The ABI constants live in the shared `abi` crate (crates/abi), consumed by
+// kernel and SDK alike; existing `crate::obj::syscall::*` paths keep working.
+pub use abi::syscall::{
+    ABI_VERSION, ST_ACCESS_DENIED, ST_BAD_HANDLE, ST_BUFFER_TOO_SMALL, ST_INVALID_ARGS, ST_KILLED,
+    ST_LIMIT_EXCEEDED, ST_NOT_SUPPORTED, ST_NO_MEMORY, ST_OK, ST_PEER_CLOSED, ST_SHOULD_WAIT,
+    ST_TIMED_OUT, ST_WRONG_TYPE, SYS_ABI_VERSION, SYS_CHANNEL_CREATE, SYS_CHANNEL_RECV,
+    SYS_CHANNEL_SEND, SYS_CLOCK_UPTIME, SYS_HANDLE_CLOSE, SYS_HANDLE_DUP, SYS_LOG,
+    SYS_MEMOBJ_CREATE, SYS_MEMOBJ_MAP, SYS_MEMOBJ_SIZE, SYS_PROCESS_EXIT, SYS_WAIT_MANY,
+};
 
 const LOG_MAX: u64 = 4096;
 const MAX_WAIT_ITEMS: u64 = 32;
@@ -70,7 +49,7 @@ pub fn dispatch(sysno: u64, args: [u64; 6]) -> (u32, u64) {
         SYS_MEMOBJ_SIZE => sys_memobj_size(args[0]),
         SYS_PROCESS_EXIT => exit_current(args[0] as u32 as i32),
         SYS_CLOCK_UPTIME => Ok(crate::arch::timer::uptime_us()),
-        SYS_ABI_VERSION => Ok(ABI_VERSION),
+        SYS_ABI_VERSION => Ok(ABI_VERSION as u64),
         _ => Err(ST_NOT_SUPPORTED),
     };
     match r {
