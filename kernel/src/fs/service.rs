@@ -11,7 +11,9 @@ use alloc::vec::Vec;
 
 use abi::fs::*;
 
-use crate::obj::channel::{ChannelEnd, Message};
+use crate::obj::channel::{self, ChannelEnd, Message};
+use crate::obj::handle::{Handle, RIGHTS_ALL};
+use crate::obj::{Object, SIG_PEER_CLOSED};
 
 use tinyfs::FsError;
 
@@ -29,6 +31,10 @@ pub struct FsService {
     /// Cwd *within the jail* for relative paths (spawner's cwd at spawn time).
     base: String,
     fds: Vec<Option<OpenFile>>,
+    /// Subtree services handed out via OP_OPEN_DIR, pumped with the parent
+    /// and dropped once their peer closes. Dropping this service drops them
+    /// all — hierarchical revocation.
+    children: Vec<FsService>,
 }
 
 fn status(e: FsError) -> u32 {
@@ -73,22 +79,62 @@ pub fn jailed_path(jail: &str, base: &str, path: &str) -> Result<String, u32> {
 
 impl FsService {
     pub fn new(ch: Arc<ChannelEnd>, jail: String, base: String) -> Self {
-        Self { ch, jail, base, fds: Vec::new() }
+        Self { ch, jail, base, fds: Vec::new(), children: Vec::new() }
     }
 
     fn resolve(&self, path: &str) -> Result<String, u32> {
         jailed_path(&self.jail, &self.base, path)
     }
 
-    /// Drain and answer every queued request.
+    /// Drain and answer every queued request, then pump subtree children
+    /// (reaping any whose peer closed).
     pub fn pump(&mut self) {
         while let Ok(msg) = self.ch.recv() {
             let reply = self.handle(&msg.bytes);
-            let _ = self.ch.send(Message { bytes: reply, handles: Vec::new() });
+            let _ = self.ch.send(reply);
+        }
+        self.children.retain_mut(|c| {
+            c.pump();
+            c.ch.signals() & SIG_PEER_CLOSED == 0
+        });
+    }
+
+    fn handle(&mut self, b: &[u8]) -> Message {
+        // OP_OPEN_DIR is the one reply that carries a handle.
+        if le_u32(b, 0) == Some(OP_OPEN_DIR) {
+            return self.op_open_dir(b);
+        }
+        Message { bytes: self.handle_bytes(b), handles: Vec::new() }
+    }
+
+    /// Mint a subtree capability: a fresh FS channel whose service is jailed
+    /// to the (validated) directory. The child can only ever narrow — its
+    /// jail is a subdir of ours, and its own OP_OPEN_DIR narrows again.
+    fn op_open_dir(&mut self, b: &[u8]) -> Message {
+        let plain = |st: u32| Message { bytes: reply1(R_OPEN_DIR, st), handles: Vec::new() };
+        let Some(path) = b.get(4..).and_then(utf8) else {
+            return plain(FS_INVALID);
+        };
+        let jail = match self.resolve(path) {
+            Ok(p) => p,
+            Err(st) => return plain(st),
+        };
+        if self.children.len() >= MAX_SUBDIRS {
+            return plain(FS_LIMIT);
+        }
+        if let Err(e) = crate::fs::resolve_dir("/", &jail) {
+            return plain(status(e));
+        }
+        let (app_end, kern_end) = channel::create();
+        self.children
+            .push(FsService::new(kern_end, jail, String::from("/")));
+        Message {
+            bytes: reply1(R_OPEN_DIR, FS_OK),
+            handles: alloc::vec![Handle::new(Object::Channel(app_end), RIGHTS_ALL)],
         }
     }
 
-    fn handle(&mut self, b: &[u8]) -> Vec<u8> {
+    fn handle_bytes(&mut self, b: &[u8]) -> Vec<u8> {
         let Some(op) = le_u32(b, 0) else {
             return r_status(FS_INVALID);
         };

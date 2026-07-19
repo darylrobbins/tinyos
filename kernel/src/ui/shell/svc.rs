@@ -35,7 +35,19 @@ impl SvcJob {
         let selfdir = format!("/data/{name}");
         let mut jail = None;
         for req in &m.fs {
-            let target = if req == "self" { selfdir.clone() } else { req.clone() };
+            // Canonicalize before the policy check: the jail string is used
+            // verbatim as a path root, so "/shared/../apps" must not pass.
+            let target = if req == "self" {
+                selfdir.clone()
+            } else {
+                match tinyfs::path::canonical("/", req) {
+                    Ok(p) => p,
+                    Err(_) => {
+                        kprintln!("{name}: fs grant invalid: {req}");
+                        continue;
+                    }
+                }
+            };
             let ok = target == selfdir
                 || target == "/shared"
                 || target.starts_with("/shared/");
