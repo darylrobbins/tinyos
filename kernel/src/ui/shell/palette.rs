@@ -232,7 +232,7 @@ impl Palette {
         } else {
             fonts.ui.draw(s, &self.input, 17.0, ix, oy + 6, TX);
         }
-        if now_ms / 530 % 2 == 0 {
+        if super::caret_on(now_ms) {
             let (tw, _) = fonts.ui.measure(&self.input, 17.0);
             let caret_x = if self.input.is_empty() { ix } else { ix + tw + 2 };
             s.fill_rect(caret_x, oy + 4, 2, 26, ACC);

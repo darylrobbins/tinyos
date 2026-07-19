@@ -50,6 +50,10 @@ impl Input {
                 match VirtioDevice::init(&dev, &mut alloc, 8) {
                     Some(v) => {
                         kprintln!("tinyos: virtio-input ready (bdf {:#x})", dev.bdf);
+                        // Register the ISR byte so the IRQ handler can
+                        // deassert level-triggered INTx.
+                        let slot = &crate::arch::irq::INPUT_ISR_ADDRS[devices.len()];
+                        slot.store(v.isr_addr(), core::sync::atomic::Ordering::Relaxed);
                         devices.push(v);
                     }
                     None => kprintln!("tinyos: virtio-input init FAILED (bdf {:#x})", dev.bdf),

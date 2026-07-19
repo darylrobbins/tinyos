@@ -1,4 +1,6 @@
 pub mod exceptions;
+pub mod gic;
+pub mod irq;
 pub mod timer;
 
 use core::arch::asm;

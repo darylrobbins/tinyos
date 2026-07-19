@@ -9,7 +9,7 @@ QEMU_SHARE   = $(shell dirname $(shell which $(QEMU)))/../share/qemu
 ifeq ($(ARCH),aarch64)
 TARGET      := aarch64-unknown-uefi
 QEMU        := qemu-system-aarch64
-MACHINE     := -machine virt
+MACHINE     := -machine virt,gic-version=3
 ACCEL       := -accel hvf -cpu host
 # Fallback if HVF misbehaves: make run ACCEL="-accel tcg -cpu cortex-a72"
 BOOT_EFI    := BOOTAA64.EFI

@@ -215,7 +215,7 @@ impl Terminal {
         let px = ox + PROMPT.len() as i32 * CELL_W;
         fonts.mono.draw(surface, &self.input, 15.0, px, y, FG);
 
-        if now_ms / 530 % 2 == 0 {
+        if crate::ui::shell::caret_on(now_ms) {
             let cx = px + self.cursor as i32 * CELL_W;
             surface.fill_rect(cx, y + 1, CELL_W, CELL_H - 2, argb(210, 228, 228, 236));
         }

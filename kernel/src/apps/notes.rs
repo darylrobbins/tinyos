@@ -62,7 +62,7 @@ impl App for NotesApp {
                 .mono
                 .draw(s, line, 15.0, body.x, body.y + i as i32 * LINE_H, TEXT);
         }
-        if focused && now / 530 % 2 == 0 {
+        if focused && crate::ui::shell::caret_on(now) {
             let row = (self.line - start) as i32;
             let cx = body.x + self.col as i32 * 9;
             s.fill_rect(cx, body.y + row * LINE_H, 2, LINE_H - 4, ACCENT);

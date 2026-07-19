@@ -12,6 +12,17 @@ pub mod wallpaper;
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
+
+/// True while the user has interacted in the last few seconds; carets
+/// blink only in this state (and park solid when idle) so cursor
+/// animation never forces frames on an idle desktop.
+pub static INTERACTIVE: AtomicBool = AtomicBool::new(true);
+
+/// Caret visibility helper shared by terminal/notes/launcher.
+pub fn caret_on(now_ms: u64) -> bool {
+    !INTERACTIVE.load(Ordering::Relaxed) || now_ms / 530 % 2 == 0
+}
 
 use crate::arch::timer;
 use crate::drivers::input::{keycode_to_char, keys, Event, ABS_MAX};
@@ -99,6 +110,7 @@ pub struct Shell {
     palette: Palette,
     quick_open: bool,
     locked: bool,
+    last_input_us: u64,
 }
 
 impl Shell {
@@ -121,6 +133,7 @@ impl Shell {
             palette: Palette::new(),
             quick_open: false,
             locked: false,
+            last_input_us: 0,
         };
         shell.open(Box::new(crate::apps::terminal::TerminalApp::new()));
         shell
@@ -145,7 +158,42 @@ impl Shell {
         self.focus = self.windows.len() - 1;
     }
 
+    /// True while input arrived within the last 3 seconds.
+    fn interactive(&self, now_us: u64) -> bool {
+        now_us.saturating_sub(self.last_input_us) < 3_000_000
+    }
+
+    /// When the loop must wake next. 60fps while interacting or a timer
+    /// countdown runs; 2fps while a monitor gauge is visible; otherwise
+    /// the next minute boundary for the clock pill.
+    pub fn next_deadline(&self, now_us: u64) -> u64 {
+        let countdown = self
+            .windows
+            .iter()
+            .any(|w| !w.hidden && w.app.title() == "Timer");
+        if self.interactive(now_us) || countdown || self.drag.is_some() {
+            return now_us + 16_667;
+        }
+        let monitor = self
+            .windows
+            .iter()
+            .any(|w| !w.hidden && w.app.title() == "Monitor");
+        if monitor {
+            return now_us + 500_000;
+        }
+        // Deep idle: input IRQs wake us instantly, so only the clock
+        // pill's minute boundary needs a timer.
+        (now_us / 1000 / 60_000 + 1) * 60_000_000
+    }
+
     pub fn handle(&mut self, events: &[Event]) {
+        if !events.is_empty() {
+            self.last_input_us = crate::arch::timer::uptime_us();
+        }
+        INTERACTIVE.store(
+            self.interactive(crate::arch::timer::uptime_us()),
+            Ordering::Relaxed,
+        );
         if self.locked {
             for ev in events {
                 if let Event::Key { code, down: true } = *ev {

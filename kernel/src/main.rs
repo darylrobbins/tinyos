@@ -129,21 +129,36 @@ fn kmain(mut fb: FbInfo, memory_map: MemoryMapOwned) -> ! {
 
     FB_SIZE.call_once(|| (fb.width, fb.height));
     let mut input = drivers::input::Input::init();
+    arch::irq::init();
     let mut shell = ui::shell::Shell::new(fb.width, fb.height);
     kprintln!("tinyos: shell up");
 
     let mut events = alloc::vec::Vec::new();
+    let mut deadline = 0u64;
+    let mut last_log_us = 0u64;
     loop {
         events.clear();
         input.poll(&mut events);
+        let now = arch::timer::uptime_us();
+        let frame_due = now >= deadline;
         shell.handle(&events);
         shell.stats_tick(events.len() as u32);
 
-        shell.compose(&mut surface, &mut fonts);
-        surface.present(&fb);
+        // Render only when something can have changed.
+        if !events.is_empty() || frame_due {
+            shell.compose(&mut surface, &mut fonts);
+            surface.present(&fb);
+        }
 
-        let next = arch::timer::uptime_us() / 16_667 * 16_667 + 16_667;
-        arch::timer::wait_until_us(next);
+        // Periodic serial heartbeat with wake statistics.
+        if now.saturating_sub(last_log_us) >= 5_000_000 {
+            let (wakes, idle) = arch::irq::wake_stats();
+            kprintln!("tinyos: wakes/s={wakes} idle={idle}%");
+            last_log_us = now;
+        }
+
+        deadline = shell.next_deadline(now);
+        arch::irq::sleep_until(deadline);
     }
 }
 

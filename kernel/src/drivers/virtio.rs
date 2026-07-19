@@ -9,6 +9,7 @@ use super::pci::{BarAllocator, PciDevice};
 const CAP_VENDOR: u8 = 0x09;
 const CFG_COMMON: u8 = 1;
 const CFG_NOTIFY: u8 = 2;
+const CFG_ISR: u8 = 3;
 
 // common config offsets
 const DEVICE_FEATURE_SELECT: usize = 0;
@@ -43,6 +44,7 @@ fn fence() {
 pub struct VirtioDevice {
     common: usize,
     notify_addr: usize,
+    isr_addr: usize,
     queue_size: u16,
     desc: usize,
     avail: usize,
@@ -61,6 +63,7 @@ impl VirtioDevice {
         // Walk capabilities for common + notify structures.
         let mut common = None;
         let mut notify = None; // (bar, offset, multiplier)
+        let mut isr = None;
         let mut cap_ptr = (pci.read8(0x34) & !3) as usize;
         while cap_ptr != 0 {
             let id = pci.read8(cap_ptr);
@@ -74,6 +77,7 @@ impl VirtioDevice {
                         let mult = pci.read32(cap_ptr + 16) as usize;
                         notify = Some((bar, offset, mult));
                     }
+                    CFG_ISR => isr = Some((bar, offset)),
                     _ => {}
                 }
             }
@@ -82,8 +86,10 @@ impl VirtioDevice {
         let (cbar, coff) = common?;
         let (nbar, noff, nmult) = notify?;
 
+        let (ibar, ioff) = isr?;
         let common = pci.bar_addr(cbar, alloc)? as usize + coff;
         let notify_base = pci.bar_addr(nbar, alloc)? as usize + noff;
+        let isr_addr = pci.bar_addr(ibar, alloc)? as usize + ioff;
 
         // Reset, then acknowledge.
         mmio_w8(common + DEVICE_STATUS, 0);
@@ -151,6 +157,7 @@ impl VirtioDevice {
         let mut dev = Self {
             common,
             notify_addr,
+            isr_addr,
             queue_size: qsize,
             desc,
             avail,
@@ -216,5 +223,10 @@ impl VirtioDevice {
     #[allow(dead_code)]
     pub fn status(&self) -> u8 {
         mmio_r8(self.common + DEVICE_STATUS)
+    }
+
+    /// Physical address of the ISR status byte; reading it deasserts INTx.
+    pub fn isr_addr(&self) -> usize {
+        self.isr_addr
     }
 }

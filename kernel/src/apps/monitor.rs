@@ -111,11 +111,22 @@ impl App for MonitorApp {
         let (used, free) = mem::stats();
         let col_w = body.w;
 
+        // IDLE bar-meter: percent of the last second spent in wfi.
+        let (_wakes, idle_pct) = crate::arch::irq::wake_stats();
+        fonts.ui_medium.draw(s, "Idle", 13.0, body.x + col_w / 2 + 10, body.y, TEXT_DIM);
+        let ix = body.x + col_w / 2 + 10;
+        let iw = col_w / 2 - 10;
+        s.fill_rect(ix, body.y + 22, iw, 6, SURFACE_HI);
+        s.fill_rect(ix, body.y + 22, (iw * idle_pct as i32 / 100).max(2), 6, ACCENT);
+        let idle_txt = format!("{idle_pct}%");
+        fonts.mono.draw(s, &idle_txt, 14.0, ix, body.y + 36, TEXT_DIM);
+
         // HEAP bar-meter.
         fonts.ui_medium.draw(s, "Heap", 13.0, body.x, body.y, TEXT_DIM);
         let meter_y = body.y + 22;
-        let frac = (used as u64 * col_w as u64 / (used + free).max(1) as u64) as i32;
-        s.fill_rect(body.x, meter_y, col_w, 6, SURFACE_HI);
+        let hw = col_w / 2 - 10;
+        let frac = (used as u64 * hw as u64 / (used + free).max(1) as u64) as i32;
+        s.fill_rect(body.x, meter_y, hw, 6, SURFACE_HI);
         s.fill_rect(body.x, meter_y, frac.max(2), 6, TEXT);
         let heap_txt = format!("{} / {} MiB", used >> 20, (used + free) >> 20);
         fonts
