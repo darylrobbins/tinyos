@@ -9,6 +9,7 @@
 
 pub mod bootstrap;
 pub mod console;
+pub mod fs;
 pub mod keys;
 pub mod syscall;
 pub mod tokens;

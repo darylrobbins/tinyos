@@ -12,7 +12,7 @@ use crate::console::Console;
 use crate::syscall::*;
 
 /// Bootstrap grant tags (from the shared abi crate).
-pub use abi::bootstrap::{TAG_CONSOLE, TAG_SHELL};
+pub use abi::bootstrap::{TAG_CONSOLE, TAG_FS, TAG_SHELL};
 
 /// Everything an app receives at startup.
 pub struct Env {
@@ -51,6 +51,7 @@ fn parse_bootstrap(msg: &Msg) -> Env {
     off += 4;
     let mut console = Channel(0);
     let mut shell = Channel(0);
+    let mut fs = Channel(0);
     for i in 0..grant_count {
         let tag = u32at(b, off);
         off += 4;
@@ -58,8 +59,12 @@ fn parse_bootstrap(msg: &Msg) -> Env {
         match tag {
             TAG_CONSOLE => console = Channel(handle),
             TAG_SHELL => shell = Channel(handle),
+            TAG_FS => fs = Channel(handle),
             _ => {}
         }
+    }
+    if fs.0 != 0 {
+        crate::fs::set_client(fs);
     }
     Env { args, console, shell }
 }

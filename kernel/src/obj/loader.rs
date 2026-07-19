@@ -178,10 +178,11 @@ pub struct SpawnedApp {
     pub thread_id: u32,
     pub console: Arc<ChannelEnd>,
     pub shell: Arc<ChannelEnd>,
+    pub fs: Arc<ChannelEnd>,
 }
 
 /// Bootstrap grant tags (also known to the SDK).
-pub use abi::bootstrap::{TAG_CONSOLE, TAG_SHELL};
+pub use abi::bootstrap::{TAG_CONSOLE, TAG_FS, TAG_SHELL};
 
 /// Build the bootstrap record: abi, argv, grant tags. Handles ride the msg.
 fn bootstrap_record(argv: &[String], tags: &[u32]) -> Vec<u8> {
@@ -265,6 +266,7 @@ pub fn spawn_with_grants(
 pub fn spawn(name: String, elf: &[u8], argv: &[String]) -> Result<SpawnedApp, LoadError> {
     let (console_app, console_kern) = channel::create();
     let (shell_app, shell_kern) = channel::create();
+    let (fs_app, fs_kern) = channel::create();
     let (process, thread_id, main_kern) = spawn_with_grants(
         name,
         elf,
@@ -272,11 +274,18 @@ pub fn spawn(name: String, elf: &[u8], argv: &[String]) -> Result<SpawnedApp, Lo
         alloc::vec![
             (TAG_CONSOLE, Handle::new(Object::Channel(console_app), RIGHTS_ALL)),
             (TAG_SHELL, Handle::new(Object::Channel(shell_app), RIGHTS_ALL)),
+            (TAG_FS, Handle::new(Object::Channel(fs_app), RIGHTS_ALL)),
         ],
     )?;
     // Park the kernel's bootstrap end in the process so it lives as long as
     // the app does — dropping it would flip the app's main channel to
     // PEER_CLOSED. The kernel never sends on it again.
     process.keep.lock().push(main_kern);
-    Ok(SpawnedApp { process, thread_id, console: console_kern, shell: shell_kern })
+    Ok(SpawnedApp {
+        process,
+        thread_id,
+        console: console_kern,
+        shell: shell_kern,
+        fs: fs_kern,
+    })
 }

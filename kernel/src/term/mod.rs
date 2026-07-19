@@ -48,6 +48,8 @@ pub struct Terminal {
 
 struct RunningApp {
     name: String,
+    /// File-protocol server for this app's FS channel.
+    fs_srv: crate::fs::service::FsService,
     process: alloc::sync::Arc<crate::obj::process::Process>,
     thread_id: u32,
     console: alloc::sync::Arc<crate::obj::channel::ChannelEnd>,
@@ -606,6 +608,10 @@ impl Terminal {
                     crate::ui::shell::extern_app::register(app.shell, name.to_string());
                     let job = RunningApp {
                         name: name.to_string(),
+                        fs_srv: crate::fs::service::FsService::new(
+                            app.fs,
+                            self.cwd.clone(),
+                        ),
                         process: app.process,
                         thread_id: app.thread_id,
                         console: app.console,
@@ -638,6 +644,7 @@ impl Terminal {
         let mut lines: Vec<(String, u32)> = Vec::new();
         let mut gone: Vec<u32> = Vec::new();
         for app in self.bg_jobs.iter_mut() {
+            app.fs_srv.pump();
             let mut replies: Vec<Vec<u8>> = Vec::new();
             while let Ok(msg) = app.console.recv() {
                 if msg.bytes.len() < 4 {
@@ -703,6 +710,7 @@ impl Terminal {
         self.pump_bg();
         let (cols, rows) = (self.view.cols, self.rows);
         let Some(app) = &mut self.running else { return };
+        app.fs_srv.pump();
         let mut lines: Vec<(String, u32)> = Vec::new();
         let mut replies: Vec<Vec<u8>> = Vec::new();
         // Drain all queued console messages.

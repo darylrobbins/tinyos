@@ -6,6 +6,8 @@
 //! ever moves to WaitQueue-based completion, these wrappers must stop
 //! holding a spin::Mutex for the duration.
 
+pub mod service;
+
 use alloc::string::String;
 use alloc::vec::Vec;
 

@@ -106,3 +106,12 @@ dependencies = [
  "tinyos-abi",
  "tinyos-app",
 ]
+
+[[package]]
+name = "view"
+version = "0.1.0"
+dependencies = [
+ "textui",
+ "tinyos-abi",
+ "tinyos-app",
+]
