@@ -42,6 +42,11 @@ _QCODE = {
 for _c in "abcdefghijklmnopqrstuvwxyz0123456789":
     _QCODE[_c] = _c
 
+# Characters that require Shift, as (shift + base-qcode) chords.
+_SHIFTED = {
+    "&": "7", "|": "backslash", ":": "semicolon", "_": "minus", "*": "8",
+}
+
 
 class Qmp:
     """Minimal QMP client over a Unix socket (stdlib only)."""
@@ -97,10 +102,12 @@ class Qmp:
     def type_line(self, text, per_key=0.02):
         """Type `text` then Enter, one key at a time."""
         for ch in text:
-            q = _QCODE.get(ch)
-            if q is None:
+            if ch in _SHIFTED:
+                self.key(["shift", _SHIFTED[ch]])
+            elif ch in _QCODE:
+                self.key([_QCODE[ch]])
+            else:
                 raise ValueError(f"no qcode mapping for {ch!r} (extend _QCODE)")
-            self.key([q])
             time.sleep(per_key)
         self.key(["ret"])
 
@@ -214,9 +221,30 @@ def main():
         #    Truncation mid-thread-list (the historical bug) never reaches them.
         step("ps (full listing)", "ps", "ID  NAME", "pid ")
 
-        # 6. Integration: launch a full-screen app from the shell (capability
-        #    forwarding + surface), kill it with Ctrl+C (foreground kill +
-        #    self-heal back to LINES), and prove the shell is alive after.
+        # 6. Spawn + argv marshaling from userspace: `hello` echoes its args, so
+        #    this exercises the SYS_PROCESS_SPAWN argument path end to end.
+        step("run with args", "run hello alpha beta",
+             "got 2 argument(s):", "[0] alpha", "[1] beta")
+
+        # 7. Filesystem write path (only reads were covered above): write a file
+        #    then read it back through cat.
+        step("write a file", "write /smoke.txt persist42")
+        step("read it back", "cat /smoke.txt", "[out] persist42")
+
+        # 8. Background-job lifecycle: `&` spawns detached, and the shell reaps
+        #    it on a later prompt (the reap runs one loop iteration after the
+        #    child exits, hence the intervening command).
+        step("background spawn", "run hello &", "] hello &")
+        step("later prompt", "echo bgstep", "[out] bgstep")
+        cur = serial.wait_for("hello done", args.step_timeout, cur)
+        print("smoke: background job reaped")
+
+        # 9. Error path must report and return to a live prompt, not wedge.
+        step("unknown app", "run nope", "run: nope: not found")
+
+        # 10. Integration: launch a full-screen app from the shell (capability
+        #     forwarding + surface), kill it with Ctrl+C (foreground kill +
+        #     self-heal back to LINES), and prove the shell is alive after.
         print("smoke: > run top    (foreground full-screen app)")
         qmp.type_line("run top")
         time.sleep(1.5)                          # let top take the screen
@@ -225,7 +253,22 @@ def main():
         time.sleep(0.5)
         step("shell alive after Ctrl+C", "echo aftertop", "[out] aftertop")
 
-        # 7. Clean shutdown: sync + poweroff, then QEMU must exit on its own.
+        # 11. Durability: the file must survive a real sync+reboot. `reboot`
+        #     syncs then PSCI-resets; QEMU restarts the same process in place,
+        #     so we wait for a second boot and read the file back.
+        print("smoke: > reboot    (sync + cold reset; file must survive)")
+        qmp.type_line("reboot")
+        # Thread `cur` through every wait so each looks PAST the first boot —
+        # otherwise these match the original boot's markers at index 0 and we'd
+        # drive the shell while the guest is still resetting.
+        cur = serial.wait_for("filesystem synced, rebooting", args.step_timeout, cur)
+        cur = serial.wait_for("tinyos: shell up", args.boot_timeout, cur)
+        cur = serial.wait_for("[out] tinyOS shell", args.boot_timeout, cur)
+        print("smoke: rebooted, shell back up")
+        time.sleep(0.5)
+        step("file survived reboot", "cat /smoke.txt", "[out] persist42")
+
+        # 12. Clean shutdown: sync + poweroff, then QEMU must exit on its own.
         print("smoke: > shutdown")
         qmp.type_line("shutdown")
         serial.wait_for("filesystem synced, going down", args.step_timeout, cur)
@@ -241,7 +284,7 @@ def main():
 
     except AssertionError as e:
         print(f"\nsmoke: FAIL — {e}", file=sys.stderr)
-    except (TimeoutError, ConnectionError, OSError) as e:
+    except (TimeoutError, ConnectionError, OSError, ValueError) as e:
         print(f"\nsmoke: FAIL — harness/QMP error: {e}", file=sys.stderr)
     finally:
         if proc.poll() is None:
