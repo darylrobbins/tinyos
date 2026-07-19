@@ -11,3 +11,4 @@ pub const MAIN_CHANNEL: u32 = 1;
 pub const TAG_CONSOLE: u32 = 1;
 pub const TAG_SHELL: u32 = 2;
 pub const TAG_FS: u32 = 3;
+pub const TAG_PROC: u32 = 4;

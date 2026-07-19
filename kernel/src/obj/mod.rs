@@ -7,6 +7,7 @@ pub mod loader;
 pub mod memobj;
 pub mod objtest;
 pub mod process;
+pub mod procsrv;
 pub mod syscall;
 pub mod usertest;
 

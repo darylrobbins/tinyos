@@ -72,6 +72,20 @@ impl Console {
         }
     }
 
+    /// Non-blocking: the next pending console event, if any.
+    pub fn poll_event(&mut self) -> Option<ConsoleEvent> {
+        loop {
+            let msg = self.ch.try_recv().ok()?;
+            if let Some(ev) = decode(&msg) {
+                if let ConsoleEvent::Resize { cols, rows } = ev {
+                    self.cols = cols;
+                    self.rows = rows;
+                }
+                return Some(ev);
+            }
+        }
+    }
+
     /// Block for one input line (LINES mode). `None` if the terminal went
     /// away. Other events (resizes etc.) are absorbed along the way.
     pub fn read_line(&mut self) -> Option<String> {

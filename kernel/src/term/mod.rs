@@ -48,6 +48,8 @@ struct RunningApp {
     name: String,
     /// File-protocol server for this app's FS channel.
     fs_srv: crate::fs::service::FsService,
+    /// Process-control server for this app's PROC channel.
+    proc_srv: crate::obj::procsrv::ProcService,
     process: alloc::sync::Arc<crate::obj::process::Process>,
     thread_id: u32,
     console: alloc::sync::Arc<crate::obj::channel::ChannelEnd>,
@@ -618,6 +620,7 @@ impl Terminal {
                             app.fs,
                             self.cwd.clone(),
                         ),
+                        proc_srv: crate::obj::procsrv::ProcService::new(app.proc),
                         process: app.process,
                         thread_id: app.thread_id,
                         console: app.console,
@@ -651,6 +654,7 @@ impl Terminal {
         let mut gone: Vec<u32> = Vec::new();
         for app in self.bg_jobs.iter_mut() {
             app.fs_srv.pump();
+            app.proc_srv.pump();
             let mut replies: Vec<Vec<u8>> = Vec::new();
             while let Ok(msg) = app.console.recv() {
                 if msg.bytes.len() < 4 {
@@ -717,6 +721,7 @@ impl Terminal {
         let (cols, rows) = (self.view.cols, self.rows);
         let Some(app) = &mut self.running else { return };
         app.fs_srv.pump();
+        app.proc_srv.pump();
         let mut lines: Vec<(String, u32)> = Vec::new();
         let mut replies: Vec<Vec<u8>> = Vec::new();
         // Drain all queued console messages.

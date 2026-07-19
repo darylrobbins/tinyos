@@ -19,6 +19,7 @@ pub mod channel;
 pub mod console;
 pub mod entry;
 pub mod fs;
+pub mod proc;
 mod font8x8;
 pub mod gfx;
 pub mod syscall;

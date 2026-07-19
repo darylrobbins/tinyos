@@ -11,6 +11,7 @@ pub mod bootstrap;
 pub mod console;
 pub mod fs;
 pub mod keys;
+pub mod proc;
 pub mod syscall;
 pub mod tokens;
 pub mod window;
