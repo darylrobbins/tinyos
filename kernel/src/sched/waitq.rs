@@ -55,10 +55,12 @@ impl WaitQueue {
         let seq = t.wait_seq.swap(u64::MAX, Ordering::AcqRel);
         if seq != u64::MAX && OBJ_SEQ.load(Ordering::SeqCst) != seq {
             // A wake happened between the signal check and this enqueue:
-            // don't sleep on it, run again immediately.
+            // don't sleep on it, run again immediately. Kick other CPUs in
+            // case this thread lands on one idling with no near deadline.
             t.wake_deadline.store(u64::MAX, Ordering::Release);
             t.set_state(State::Ready);
             super::READY.lock().push_back(t);
+            super::kick_others();
             return;
         }
         self.waiters.lock().push(t);

@@ -40,6 +40,10 @@ pub fn wake_objects() {
     use core::sync::atomic::Ordering;
     crate::sched::waitq::OBJ_SEQ.fetch_add(1, Ordering::SeqCst);
     crate::sched::waitq::OBJECTS.wake_all();
+    // Readied threads may belong to idle CPUs sitting in wfi/hlt with no
+    // near deadline (object waits block indefinitely now that the 100 ms
+    // poll cap is gone) — IPI them to re-check the ready queue, as spawn does.
+    crate::sched::kick_others();
 }
 
 /// Block until any of `sets` has a wanted signal, the (absolute µs)

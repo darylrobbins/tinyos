@@ -168,6 +168,12 @@ fn drain_wakes() {
     waitq::drain(arch::timer::uptime_us());
 }
 
+/// IPI the other CPUs to re-check the ready queue. Called after readying a
+/// thread that may be destined for a CPU idling in wfi/hlt.
+pub fn kick_others() {
+    arch::irq::kick_others(cpu_id());
+}
+
 /// Block the calling thread for `us` microseconds.
 pub fn sleep_us(us: u64) {
     waitq::TIMER.block_current(arch::timer::uptime_us() + us);
