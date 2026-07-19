@@ -15,10 +15,11 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use abi::bootstrap::{TAG_CONSOLE, TAG_FS};
+use abi::bootstrap::{TAG_CONSOLE, TAG_FS, TAG_PROC, TAG_SHELL};
+use abi::console::INPUT_MODE_LINES;
 use abi::fs::KIND_DIR;
 use tinyos_app::syscall::{syscall2, SYS_HANDLE_DUP, RIGHTS_ALL};
-use tinyos_app::{app, fs, print, println, proc, process, read_line, Env};
+use tinyos_app::{app, entry, fs, print, println, proc, process, read_line, Env};
 
 /// Join + normalize: absolute paths pass through; relative resolve against
 /// `cwd`; "." and ".." handled textually.
@@ -51,15 +52,21 @@ fn run(env: &Env, cwd: &str, name: &str, args: &[&str]) {
             return;
         }
     };
-    // Children share our console and fs (dup'd, so we keep ours). The fs
-    // channel is safe to share because we don't touch it while waiting.
+    // Children inherit our capabilities (dup'd, so we keep ours): console
+    // (shared — safe because we don't read it while waiting on the child),
+    // fs, the window server, and process control. This lets windowed apps
+    // (edit) and surface apps (vi, top) run from the shell.
     let mut grants: Vec<(u32, u32)> = Vec::new();
-    if let Ok(c) = syscall2(SYS_HANDLE_DUP, env.console.0 as u64, RIGHTS_ALL as u64).ok() {
-        grants.push((TAG_CONSOLE, c as u32));
-    }
-    if env.fs.0 != 0 {
-        if let Ok(f) = syscall2(SYS_HANDLE_DUP, env.fs.0 as u64, RIGHTS_ALL as u64).ok() {
-            grants.push((TAG_FS, f as u32));
+    for (tag, ch) in [
+        (TAG_CONSOLE, env.console.0),
+        (TAG_FS, env.fs.0),
+        (TAG_SHELL, env.shell.0),
+        (TAG_PROC, env.proc.0),
+    ] {
+        if ch != 0 {
+            if let Ok(h) = syscall2(SYS_HANDLE_DUP, ch as u64, RIGHTS_ALL as u64).ok() {
+                grants.push((tag, h as u32));
+            }
         }
     }
     let _ = cwd; // children see paths relative to the service's base
@@ -67,6 +74,12 @@ fn run(env: &Env, cwd: &str, name: &str, args: &[&str]) {
         Ok(child) => {
             let tid = child.thread_id;
             child.wait();
+            // A surface/raw-key child may have left the terminal in KEYS
+            // mode; restore line editing for our prompt (surface apps also
+            // reset on close, this covers the rest).
+            if let Some(con) = entry::console() {
+                con.set_input_mode(INPUT_MODE_LINES);
+            }
             println!("[{tid}] done");
         }
         Err(st) => println!("run: spawn failed (status {st})"),

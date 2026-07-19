@@ -764,6 +764,11 @@ impl Terminal {
                 OP_SET_INPUT_MODE if msg.bytes.len() >= 8 => {
                     app.input_mode =
                         u32::from_le_bytes(msg.bytes[4..8].try_into().unwrap());
+                    // A mode switch marks a new interaction phase — e.g. a
+                    // console app launched from a userspace shell that shares
+                    // the console, which missed the one-shot startup Resize.
+                    // Re-arm it so the app learns the terminal dimensions.
+                    app.sent_size = (0, 0);
                 }
                 OP_SURFACE_OPEN if msg.bytes.len() >= 12 => {
                     let scols = u32::from_le_bytes(msg.bytes[4..8].try_into().unwrap()) as usize;
@@ -810,7 +815,13 @@ impl Terminal {
                         s.cursor = (f(4) as usize, f(8) as usize, f(12), f(16) != 0);
                     }
                 }
-                OP_SURFACE_CLOSE => app.surface = None,
+                OP_SURFACE_CLOSE => {
+                    app.surface = None;
+                    // A surface app (vi, top) launched from a shell that
+                    // shares the console has finished; restore line mode so
+                    // the shell's prompt reads work again.
+                    app.input_mode = INPUT_MODE_LINES;
+                }
                 OP_LIVE_OPEN | OP_LIVE_RESIZE if msg.bytes.len() >= 8 => {
                     let lrows =
                         u32::from_le_bytes(msg.bytes[4..8].try_into().unwrap()) as usize;
