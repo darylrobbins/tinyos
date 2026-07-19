@@ -112,7 +112,7 @@ impl App for MonitorApp {
         let col_w = body.w;
 
         // IDLE bar-meter: percent of the last second spent in wfi.
-        let (_wakes, idle_pct) = crate::arch::irq::wake_stats();
+        let (_wakes, idle_pct) = crate::arch::irq::wake_stats(0);
         fonts.ui_medium.draw(s, "Idle", 13.0, body.x + col_w / 2 + 10, body.y, TEXT_DIM);
         let ix = body.x + col_w / 2 + 10;
         let iw = col_w / 2 - 10;

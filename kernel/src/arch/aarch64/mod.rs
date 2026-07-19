@@ -47,6 +47,15 @@ impl fmt::Write for Serial {
     }
 }
 
+pub const MAX_CPUS: usize = 4;
+
+/// 0-based CPU index. On QEMU virt, MPIDR Aff0 is 0..N-1.
+pub fn cpu_id() -> usize {
+    let mpidr: u64;
+    unsafe { asm!("mrs {0}, MPIDR_EL1", out(reg) mpidr) };
+    ((mpidr & 0xFF) as usize).min(MAX_CPUS - 1)
+}
+
 pub fn boot_privilege() -> &'static str {
     let el: u64;
     unsafe { asm!("mrs {0}, CurrentEL", out(reg) el) };

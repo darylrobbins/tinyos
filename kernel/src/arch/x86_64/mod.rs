@@ -39,6 +39,14 @@ impl fmt::Write for Serial {
     }
 }
 
+pub const MAX_CPUS: usize = 4;
+
+/// 0-based CPU index. On QEMU q35, LAPIC IDs are 0..N-1.
+pub fn cpu_id() -> usize {
+    let id = unsafe { (0xFEE0_0020usize as *const u32).read_volatile() } >> 24;
+    (id as usize).min(MAX_CPUS - 1)
+}
+
 pub fn boot_privilege() -> &'static str {
     "ring 0"
 }

@@ -152,7 +152,7 @@ fn kmain(mut fb: FbInfo, memory_map: MemoryMapOwned) -> ! {
 
         // Periodic serial heartbeat with wake statistics.
         if now.saturating_sub(last_log_us) >= 5_000_000 {
-            let (wakes, idle) = arch::irq::wake_stats();
+            let (wakes, idle) = arch::irq::wake_stats(0);
             kprintln!("tinyos: wakes/s={wakes} idle={idle}%");
             last_log_us = now;
         }
