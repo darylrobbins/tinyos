@@ -132,7 +132,7 @@ pub fn boot_hook() {
             Err(e) => kprintln!("tinyos: boottest FAILED: {e}"),
         },
         Some("fs") => {
-            for path in ["/", "/EFI/BOOT"] {
+            for path in ["/", "/apps"] {
                 match crate::fs::list(path) {
                     Some(entries) => {
                         for (name, size, is_dir) in entries {

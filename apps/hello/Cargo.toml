@@ -1,0 +1,11 @@
+[package]
+name = "hello"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tinyos-app = { path = "../sdk" }
+
+[[bin]]
+name = "hello"
+path = "src/main.rs"

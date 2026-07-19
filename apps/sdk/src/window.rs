@@ -1,0 +1,109 @@
+//! Window client: open a window on the shell, present a shared BGRA surface,
+//! and receive input events. Protocol per the app-api spec (u32 opcode +
+//! payload; the surface travels as a mapped MemObj handle).
+
+use alloc::vec::Vec;
+
+use crate::channel::Channel;
+use crate::syscall::*;
+use crate::wait::{WaitItem, wait_many};
+
+const OP_OPEN: u32 = 1;
+const OP_OPENED: u32 = 2;
+const OP_PRESENT: u32 = 3;
+const OP_CHAR: u32 = 16;
+const OP_KEY: u32 = 17;
+const OP_CLOSE_REQ: u32 = 18;
+
+/// An input event delivered by the shell.
+pub enum Event {
+    Char(char),
+    Key { code: u16, down: bool },
+    CloseRequested,
+}
+
+/// A window backed by a shared surface the app draws into.
+pub struct Window {
+    ch: Channel,
+    pub width: u32,
+    pub height: u32,
+    surface_va: u64,
+}
+
+impl Window {
+    /// Open a `w`×`h` window titled `title` on the shell channel.
+    pub fn open(shell: Channel, w: u32, h: u32, title: &str) -> Result<Window, u32> {
+        // Shared BGRA surface: w*h*4 bytes, rounded to the map granularity.
+        let size = (w as u64 * h as u64 * 4 + 0xFFF) & !0xFFF;
+        let mem = syscall1(SYS_MEMOBJ_CREATE, size).ok()?;
+        let dup = syscall2(SYS_HANDLE_DUP, mem, RIGHTS_ALL as u64).ok()? as u32;
+        let surface_va = syscall3(SYS_MEMOBJ_MAP, mem, 0, size).ok()?;
+
+        let mut msg = Vec::new();
+        msg.extend_from_slice(&OP_OPEN.to_le_bytes());
+        msg.extend_from_slice(&w.to_le_bytes());
+        msg.extend_from_slice(&h.to_le_bytes());
+        msg.extend_from_slice(&(title.len() as u32).to_le_bytes());
+        msg.extend_from_slice(title.as_bytes());
+        shell.send(&msg, &[dup])?;
+
+        // Await OPENED.
+        loop {
+            let m = shell.recv()?;
+            if m.bytes.len() >= 4 && u32::from_le_bytes(m.bytes[0..4].try_into().unwrap()) == OP_OPENED {
+                break;
+            }
+        }
+        Ok(Window { ch: shell, width: w, height: h, surface_va })
+    }
+
+    /// The BGRA pixel buffer (row-major, stride = width).
+    pub fn pixels(&mut self) -> &mut [u32] {
+        unsafe {
+            core::slice::from_raw_parts_mut(
+                self.surface_va as *mut u32,
+                (self.width * self.height) as usize,
+            )
+        }
+    }
+
+    /// Present the whole surface.
+    pub fn present(&self) {
+        let mut msg = Vec::new();
+        msg.extend_from_slice(&OP_PRESENT.to_le_bytes());
+        for v in [0u32, 0, self.width, self.height] {
+            msg.extend_from_slice(&v.to_le_bytes());
+        }
+        let _ = self.ch.send(&msg, &[]);
+    }
+
+    /// Drain pending input events (non-blocking).
+    pub fn poll_events(&self, out: &mut Vec<Event>) {
+        while let Ok(m) = self.ch.try_recv() {
+            if m.bytes.len() < 4 {
+                continue;
+            }
+            let op = u32::from_le_bytes(m.bytes[0..4].try_into().unwrap());
+            match op {
+                OP_CHAR if m.bytes.len() >= 8 => {
+                    let c = u32::from_le_bytes(m.bytes[4..8].try_into().unwrap());
+                    if let Some(c) = char::from_u32(c) {
+                        out.push(Event::Char(c));
+                    }
+                }
+                OP_KEY if m.bytes.len() >= 7 => {
+                    let code = u16::from_le_bytes(m.bytes[4..6].try_into().unwrap());
+                    out.push(Event::Key { code, down: m.bytes[6] != 0 });
+                }
+                OP_CLOSE_REQ => out.push(Event::CloseRequested),
+                _ => {}
+            }
+        }
+    }
+
+    /// Block until an event arrives or `deadline_us`.
+    pub fn wait(&self, deadline_us: u64) {
+        let mut it = [WaitItem { handle: self.ch.0, want: SIG_READABLE, observed: 0 }];
+        let _ = wait_many(&mut it, deadline_us);
+    }
+}

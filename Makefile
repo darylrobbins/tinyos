@@ -47,12 +47,23 @@ QEMU_ARGS    = $(MACHINE) -m 512M $(ACCEL) $(FLASH) \
 
 run: QEMU_ARGS += $(DISPLAY_ARG)
 
-.PHONY: build run gdb clean firmware
+.PHONY: build apps run gdb clean firmware
 
-build:
+build: apps
 	cargo build --target $(TARGET) $(if $(filter release,$(PROFILE)),--release,)
 	mkdir -p $(ESP)/EFI/BOOT
 	cp $(KERNEL_EFI) $(ESP)/EFI/BOOT/$(BOOT_EFI)
+
+# Third-party apps: a separate workspace (aarch64-unknown-none), copied into
+# the ESP so the kernel loads them at runtime. Independent of the kernel
+# build. aarch64 only for now (userspace is aarch64-first).
+APP_BINS := hello pixels
+apps:
+ifeq ($(ARCH),aarch64)
+	cd apps && cargo build --release
+	mkdir -p $(ESP)/apps
+	$(foreach a,$(APP_BINS),cp apps/target/aarch64-unknown-none/release/$(a) $(ESP)/apps/$(a);)
+endif
 
 firmware:
 	mkdir -p $(BUILD)

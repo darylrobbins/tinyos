@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["sdk", "hello", "pixels"]
+
+[profile.release]
+opt-level = 2
+lto = true
+panic = "abort"
