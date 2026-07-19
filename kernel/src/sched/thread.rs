@@ -49,6 +49,8 @@ pub struct Thread {
     /// `_stack` doubles as the kernel stack traps land on.
     pub aspace: Option<Arc<Mutex<AddrSpace>>>,
     pub user: Option<UserInit>,
+    /// Owning process (handle table, exit state) for app threads.
+    pub proc: Option<Arc<crate::obj::process::Process>>,
     /// Cached TTBR1 value (root | ASID) for lock-free scheduler activation;
     /// 0 = kernel-only thread.
     pub user_ttbr1: u64,
@@ -83,6 +85,7 @@ impl Thread {
             _stack: Some(stack),
             aspace: None,
             user: None,
+            proc: None,
             user_ttbr1: 0,
         }
     }
@@ -97,11 +100,13 @@ impl Thread {
         entry: fn(),
         aspace: Arc<Mutex<AddrSpace>>,
         user: UserInit,
+        proc: Option<Arc<crate::obj::process::Process>>,
     ) -> Self {
         let user_ttbr1 = aspace.lock().ttbr1();
         let mut t = Self::new(id, name, class, affinity, entry);
         t.aspace = Some(aspace);
         t.user = Some(user);
+        t.proc = proc;
         t.user_ttbr1 = user_ttbr1;
         t
     }
@@ -122,6 +127,7 @@ impl Thread {
             _stack: None,
             aspace: None,
             user: None,
+            proc: None,
             user_ttbr1: 0,
         }
     }

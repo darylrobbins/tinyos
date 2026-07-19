@@ -11,6 +11,19 @@ use crate::sched::{self, thread::Class};
 /// Spawn the test thread. `spin` = infinite EL0 loop (proves preemption and
 /// `kill`); otherwise: syscall-log a string, then exit(42).
 pub fn spawn(spin: bool) -> Result<u32, &'static str> {
+    spawn_mode(if spin { Mode::Spin } else { Mode::Hello })
+}
+
+#[derive(PartialEq, Clone, Copy)]
+pub enum Mode {
+    Hello,
+    Spin,
+    /// clock_uptime → wait_many(count=0, now+200ms) → expect TIMED_OUT →
+    /// exit(42); any deviation exits 1.
+    Sys,
+}
+
+pub fn spawn_mode(mode: Mode) -> Result<u32, &'static str> {
     let Some(mut asp) = AddrSpace::new() else {
         return Err("userspace unsupported on this arch");
     };
@@ -19,10 +32,28 @@ pub fn spawn(spin: bool) -> Result<u32, &'static str> {
     };
 
     let msg = b"hello from EL0";
-    let insns: &[u32] = if spin {
-        &[0x1400_0000] // b . : never yields, only preemption reaps it
-    } else {
-        &[
+    let insns: &[u32] = match mode {
+        Mode::Spin => &[0x1400_0000], // b . : never yields, only preemption reaps it
+        Mode::Sys => &[
+            0xD280_0168, // movz x8, #11          (SYS_CLOCK_UPTIME)
+            0xD400_0001, // svc #0                -> x1 = uptime µs
+            0xD280_1A82, // movz x2, #0x0D40      (200_000 = 0x30D40)
+            0xF2A0_0062, // movk x2, #0x3, lsl 16
+            0x8B01_0042, // add x2, x2, x1        (deadline = now + 200ms)
+            0xAA1F_03E0, // mov x0, xzr           (items = null)
+            0xAA1F_03E1, // mov x1, xzr           (count = 0: pure sleep)
+            0xD280_00C8, // movz x8, #6           (SYS_WAIT_MANY)
+            0xD400_0001, // svc #0                -> x0 = status
+            0xF100_1C1F, // subs xzr, x0, #7      (ST_TIMED_OUT?)
+            0x5400_0061, // b.ne +12
+            0xD280_0540, // movz x0, #42
+            0x1400_0002, // b +8
+            0xD280_0020, // movz x0, #1
+            0xD280_0148, // movz x8, #10          (SYS_PROCESS_EXIT)
+            0xD400_0001, // svc #0
+            0x1400_0000, // b .
+        ],
+        Mode::Hello => &[
             0xD280_2000,                           // movz x0, #0x100        (msg VA, low)
             0xF2A0_0800,                           // movk x0, #0x40, lsl 16
             0xF2DF_FF80,                           // movk x0, #0xFFFC, lsl 32
@@ -56,13 +87,21 @@ pub fn spawn(spin: bool) -> Result<u32, &'static str> {
     }
 
     Ok(sched::spawn_user(
-        alloc::format!("user{}", if spin { "spin" } else { "test" }),
+        alloc::format!(
+            "user{}",
+            match mode {
+                Mode::Spin => "spin",
+                Mode::Sys => "sys",
+                Mode::Hello => "test",
+            }
+        ),
         Class::Normal,
         if sched::online_cpus() > 1 { 0b1110 } else { 0b0001 },
         Arc::new(spin::Mutex::new(asp)),
         APP_IMAGE_BASE,
         stack_va + stack_len as u64,
         0,
+        None,
     ))
 }
 
@@ -86,6 +125,10 @@ pub fn boot_hook() {
                     spin_watchdog,
                 );
             }
+            Err(e) => kprintln!("tinyos: boottest FAILED: {e}"),
+        },
+        Some("sys") => match spawn_mode(Mode::Sys) {
+            Ok(id) => kprintln!("tinyos: boottest spawned EL0 sys-test thread {id}"),
             Err(e) => kprintln!("tinyos: boottest FAILED: {e}"),
         },
         Some("obj") => {

@@ -65,6 +65,18 @@ impl HandleTable {
             .ok_or(ST_BAD_HANDLE)
     }
 
+    /// Reinstate a handle at its old (just-freed) slot — the undo path for
+    /// a failed transfer. Returns false if the slot was re-taken meanwhile.
+    pub fn insert_back(&mut self, hv: u32, h: Handle) -> bool {
+        match self.slots.get_mut(hv.wrapping_sub(1) as usize) {
+            Some(slot @ None) => {
+                *slot = Some(h);
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Duplicate with narrowed rights: `mask` is ANDed in, never widens.
     pub fn dup(&mut self, hv: u32, mask: u32) -> Result<u32, u32> {
         let h = self.get(hv)?;

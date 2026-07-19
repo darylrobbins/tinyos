@@ -70,6 +70,7 @@ pub fn spawn_user(
     pc: u64,
     sp: u64,
     arg: u64,
+    proc: Option<Arc<crate::obj::process::Process>>,
 ) -> u32 {
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let t = Arc::new(Thread::new_user(
@@ -80,6 +81,7 @@ pub fn spawn_user(
         user_trampoline,
         aspace,
         UserInit { pc, sp, arg },
+        proc,
     ));
     THREADS.lock().push(t.clone());
     READY.lock().push_back(t);

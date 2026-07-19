@@ -213,7 +213,7 @@ pub fn activate(ttbr1: u64) {
 fn finish_user_trap() {
     let me = crate::sched::current();
     if me.kill_pending.load(Ordering::Acquire) {
-        crate::sched::exit();
+        crate::obj::syscall::exit_current(-9);
     }
     timer::set_timer_us(timer::uptime_us() + SLICE_US);
 }
@@ -237,7 +237,7 @@ extern "C" fn user_sync_entry(frame: &mut TrapFrame) {
             crate::sched::current().id,
             frame.elr
         );
-        crate::sched::exit();
+        crate::obj::syscall::exit_current(-1);
     }
     finish_user_trap();
 }
