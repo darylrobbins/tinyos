@@ -1,6 +1,5 @@
 //! Terminal widget + built-in command shell.
 
-use alloc::collections::VecDeque;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -11,10 +10,12 @@ use crate::sched;
 use crate::sched::thread::Class;
 use crate::gfx::font::Fonts;
 use crate::gfx::surface::{argb, rgb, Surface};
+use crate::ui::textview::TextView;
 use crate::{mem, VERSION};
 
-pub const CELL_W: i32 = 9;
-pub const CELL_H: i32 = 19;
+// Monospace cell metrics live with the shared text widget; re-exported so the
+// hosting card can size itself in cells.
+pub use crate::ui::textview::{CELL_H, CELL_W};
 
 const FG: u32 = rgb(0xe8, 0xec, 0xf2);
 const ACCENT: u32 = rgb(0x5f, 0xd4, 0xc4);
@@ -26,16 +27,16 @@ const PROMPT_CHEVRON: &str = "> ";
 const SCROLLBACK: usize = 400;
 
 pub struct Terminal {
-    /// Wrap width in cells; the hosting card updates this from its rect.
-    pub cols: usize,
-    lines: VecDeque<(String, u32)>,
-    input: String,
-    cursor: usize,
+    /// Scrollback + editable prompt line, rendered by the shared widget.
+    view: TextView,
     history: Vec<String>,
     hist_idx: Option<usize>,
     cwd: String,
     /// A foreground app launched via `run`, if any.
     running: Option<RunningApp>,
+    /// An `edit <file>` request for the shell to open an editor window,
+    /// as (cwd, path). Drained each frame by `Shell::pump_app_requests`.
+    pending_edit: Option<(String, String)>,
 }
 
 struct RunningApp {
@@ -49,17 +50,26 @@ struct RunningApp {
 impl Terminal {
     pub fn new() -> Self {
         let mut t = Self {
-            cols: 80,
-            lines: VecDeque::new(),
-            input: String::new(),
-            cursor: 0,
+            view: TextView::console(SCROLLBACK, FG, argb(210, 228, 228, 236)),
             history: Vec::new(),
             hist_idx: None,
             cwd: "/".to_string(),
             running: None,
+            pending_edit: None,
         };
+        t.refresh_prompt();
         t.out(format!("tinyOS {VERSION} - type 'help' to get started"), DIM);
         t
+    }
+
+    /// Wrap width in cells; the hosting card updates this from its rect.
+    pub fn set_cols(&mut self, cols: usize) {
+        self.view.cols = cols;
+    }
+
+    /// Take a pending `edit <file>` request, if any (shell drains this).
+    pub fn take_pending_edit(&mut self) -> Option<(String, String)> {
+        self.pending_edit.take()
     }
 
     /// Prompt path segment, spaces included (" / ", " /notes ").
@@ -67,56 +77,37 @@ impl Terminal {
         format!(" {} ", self.cwd)
     }
 
-    fn out(&mut self, s: String, color: u32) {
-        // Wrap to the grid width.
-        let chars: Vec<char> = s.chars().collect();
-        if chars.is_empty() {
-            self.push_line(String::new(), color);
-        }
-        for chunk in chars.chunks(self.cols.max(1)) {
-            self.push_line(chunk.iter().collect(), color);
-        }
+    /// Rebuild the multi-color prompt prefix from the current cwd.
+    fn refresh_prompt(&mut self) {
+        self.view.set_prompt(alloc::vec![
+            (PROMPT_USER.to_string(), ACCENT),
+            (self.prompt_path(), DIM),
+            (PROMPT_CHEVRON.to_string(), ACCENT),
+        ]);
     }
 
-    fn push_line(&mut self, s: String, color: u32) {
-        if self.lines.len() >= SCROLLBACK {
-            self.lines.pop_front();
-        }
-        self.lines.push_back((s, color));
+    fn out(&mut self, s: String, color: u32) {
+        self.view.append_frozen(s, color);
     }
 
     pub fn on_char(&mut self, c: char) {
         if c == '\n' {
             self.execute();
         } else {
-            self.input.insert(self.byte_cursor(), c);
-            self.cursor += 1;
+            self.view.insert_char(c);
             self.hist_idx = None;
         }
     }
 
     pub fn on_key(&mut self, code: u16) {
         match code {
-            keys::BACKSPACE => {
-                if self.cursor > 0 {
-                    self.cursor -= 1;
-                    self.input.remove(self.byte_cursor());
-                }
-            }
-            keys::LEFT => self.cursor = self.cursor.saturating_sub(1),
-            keys::RIGHT => self.cursor = (self.cursor + 1).min(self.input.chars().count()),
+            keys::BACKSPACE => self.view.backspace(),
+            keys::LEFT => self.view.left(),
+            keys::RIGHT => self.view.right(),
             keys::UP => self.history_nav(true),
             keys::DOWN => self.history_nav(false),
             _ => {}
         }
-    }
-
-    fn byte_cursor(&self) -> usize {
-        self.input
-            .char_indices()
-            .nth(self.cursor)
-            .map(|(i, _)| i)
-            .unwrap_or(self.input.len())
     }
 
     fn history_nav(&mut self, up: bool) {
@@ -131,20 +122,15 @@ impl Terminal {
             (Some(_), false) => None,
         };
         self.hist_idx = idx;
-        self.input = idx.map(|i| self.history[i].clone()).unwrap_or_default();
-        self.cursor = self.input.chars().count();
+        let text = idx.map(|i| self.history[i].clone()).unwrap_or_default();
+        self.view.set_active(text);
     }
 
     fn execute(&mut self) {
-        let cmd = self.input.trim().to_string();
-        let echo = format!(
-            "{PROMPT_USER}{}{PROMPT_CHEVRON}{}",
-            self.prompt_path(),
-            self.input
-        );
-        self.out(echo, DIM);
-        self.input.clear();
-        self.cursor = 0;
+        let raw = self.view.active_text();
+        let cmd = raw.trim().to_string();
+        let echo = format!("{PROMPT_USER}{}{PROMPT_CHEVRON}{raw}", self.prompt_path());
+        self.view.freeze_active_as(echo, DIM);
         self.hist_idx = None;
 
         if cmd.is_empty() {
@@ -170,6 +156,7 @@ impl Terminal {
                     ("run <name>", "run an app from /apps"),
                     ("ls [path]", "list directory"),
                     ("cat <file>", "print file contents"),
+                    ("edit <file>", "edit a file in a new window"),
                     ("write <file> <text>", "write text to a file"),
                     ("append <file> <text>", "append text to a file"),
                     ("mkdir <dir>", "create a directory"),
@@ -186,7 +173,7 @@ impl Terminal {
                 }
             }
             "echo" => self.out(rest.to_string(), FG),
-            "clear" => self.lines.clear(),
+            "clear" => self.view.clear(),
             "sysinfo" => {
                 let (used, free) = mem::stats();
                 let lines = [
@@ -284,6 +271,14 @@ impl Terminal {
                 },
                 Err(e) => self.out(format!("cat: {e}"), ERR),
             },
+            "edit" => {
+                let p = rest.trim();
+                if p.is_empty() {
+                    self.out("usage: edit <file>".to_string(), ERR);
+                } else {
+                    self.pending_edit = Some((self.cwd.clone(), p.to_string()));
+                }
+            }
             "write" | "append" => match rest.trim().split_once(' ') {
                 Some((file, text)) => {
                     let append = name == "append";
@@ -320,7 +315,10 @@ impl Terminal {
             "cd" => {
                 let path = if rest.trim().is_empty() { "/" } else { rest.trim() };
                 match crate::fs::resolve_dir(&self.cwd, path) {
-                    Ok(canon) => self.cwd = canon,
+                    Ok(canon) => {
+                        self.cwd = canon;
+                        self.refresh_prompt();
+                    }
                     Err(e) => self.out(format!("cd: {e}"), ERR),
                 }
             }
@@ -472,7 +470,7 @@ impl Terminal {
     }
 
     pub fn draw(
-        &self,
+        &mut self,
         surface: &mut Surface,
         fonts: &mut Fonts,
         ox: i32,
@@ -480,32 +478,7 @@ impl Terminal {
         rows: usize,
         now_ms: u64,
     ) {
-        // Visible slice: last rows-1 scrollback lines, prompt on the next row.
-        let visible = rows.saturating_sub(1).max(1);
-        let start = self.lines.len().saturating_sub(visible);
-        let mut row = 0;
-        for (text, color) in self.lines.iter().skip(start) {
-            fonts
-                .mono
-                .draw(surface, text, 15.0, ox, oy + row as i32 * CELL_H, *color);
-            row += 1;
-        }
-
-        // Prompt line with block cursor: user teal, path dim, chevron teal.
-        let y = oy + row as i32 * CELL_H;
-        let path = self.prompt_path();
-        fonts.mono.draw(surface, PROMPT_USER, 15.0, ox, y, ACCENT);
-        let path_x = ox + PROMPT_USER.len() as i32 * CELL_W;
-        fonts.mono.draw(surface, &path, 15.0, path_x, y, DIM);
-        let chev_x = path_x + path.len() as i32 * CELL_W;
-        fonts.mono.draw(surface, PROMPT_CHEVRON, 15.0, chev_x, y, ACCENT);
-        let px = chev_x + PROMPT_CHEVRON.len() as i32 * CELL_W;
-        fonts.mono.draw(surface, &self.input, 15.0, px, y, FG);
-
-        if crate::ui::shell::caret_on(now_ms) {
-            let cx = px + self.cursor as i32 * CELL_W;
-            surface.fill_rect(cx, y + 1, CELL_W, CELL_H - 2, argb(210, 228, 228, 236));
-        }
+        self.view.draw(surface, fonts, ox, oy, rows, now_ms, true);
     }
 }
 

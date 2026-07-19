@@ -1,6 +1,7 @@
 pub mod cursor;
 pub mod shell;
 pub mod splash;
+pub mod textview;
 
 /// Ease-in-out cubic, t in 0.0..=1.0.
 pub fn ease(t: f32) -> f32 {

@@ -36,6 +36,9 @@ pub trait App: core::any::Any {
     );
     fn on_char(&mut self, _c: char) {}
     fn on_key(&mut self, _code: u16) {}
+    /// A Ctrl+key chord the shell did not reserve (e.g. Ctrl+S). Lets apps
+    /// implement their own shortcuts; the shell keeps Ctrl+K/L/arrows.
+    fn on_ctrl_key(&mut self, _code: u16) {}
     /// Apps that animate continuously (hosted userspace surfaces) return true
     /// so the shell keeps composing frames while they are visible.
     fn wants_frames(&self) -> bool {

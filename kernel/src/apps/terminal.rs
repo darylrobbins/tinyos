@@ -13,6 +13,11 @@ impl TerminalApp {
             term: Terminal::new(),
         }
     }
+
+    /// A pending `edit <file>` request, drained by the shell each frame.
+    pub fn take_pending_edit(&mut self) -> Option<(alloc::string::String, alloc::string::String)> {
+        self.term.take_pending_edit()
+    }
 }
 
 impl App for TerminalApp {
@@ -38,7 +43,7 @@ impl App for TerminalApp {
 
     fn draw(&mut self, s: &mut Surface, fonts: &mut Fonts, body: Rect, _focused: bool, now: u64) {
         self.term.pump();
-        self.term.cols = (body.w / CELL_W).max(10) as usize;
+        self.term.set_cols((body.w / CELL_W).max(10) as usize);
         let rows = (body.h / CELL_H).max(2) as usize;
         self.term.draw(s, fonts, body.x, body.y, rows, now);
     }

@@ -550,6 +550,26 @@ impl Shell {
         }
     }
 
+    /// Drain `edit <file>` requests queued by any Terminal window and open an
+    /// editor window for each. Called once per frame from the main loop.
+    pub fn pump_app_requests(&mut self) {
+        let mut reqs = alloc::vec::Vec::new();
+        for win in &mut self.windows {
+            if let Some(t) = win
+                .app
+                .as_any()
+                .downcast_mut::<crate::apps::terminal::TerminalApp>()
+            {
+                if let Some(r) = t.take_pending_edit() {
+                    reqs.push(r);
+                }
+            }
+        }
+        for (cwd, path) in reqs {
+            self.open(Box::new(crate::apps::editor::EditorApp::open(cwd, path)));
+        }
+    }
+
     /// Per-frame stats feed for any open monitor window.
     pub fn stats_tick(&mut self, events: u32) {
         let now = timer::uptime_ms();
@@ -585,7 +605,12 @@ impl Shell {
                 keys::RIGHT => self.snap_focused(SnapZone::Right),
                 keys::UP => self.snap_focused(SnapZone::Max),
                 keys::DOWN => self.restore_focused(),
-                _ => {}
+                // Unreserved chords (e.g. Ctrl+S) go to the focused app.
+                _ => {
+                    if let Some(win) = self.windows.get_mut(self.focus) {
+                        win.app.on_ctrl_key(code);
+                    }
+                }
             }
             return;
         }

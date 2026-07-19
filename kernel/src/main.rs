@@ -181,6 +181,7 @@ fn ui_thread_main() {
         shell.handle(&events);
         shell.pump_externals();
         shell.stats_tick(events.len() as u32);
+        shell.pump_app_requests();
 
         // Render only when something can have changed.
         if !events.is_empty() || frame_due {
