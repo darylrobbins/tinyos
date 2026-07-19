@@ -156,15 +156,10 @@ impl<D: BlockDevice> Tinyfs<D> {
             if fs.inodes[i].kind == InodeKind::Free {
                 continue;
             }
-            let blocks = fs.inode_blocks(i)?;
-            for b in blocks {
+            let (data, meta) = fs.inode_block_lists(i)?;
+            for b in data.into_iter().chain(meta) {
                 fs.check_range(b)?;
                 fs.bset(b);
-            }
-            let ind = fs.inodes[i].indirect;
-            if ind != 0 {
-                fs.check_range(ind)?;
-                fs.bset(ind);
             }
         }
         if fs.inodes[ROOT_INO as usize].kind != InodeKind::Dir {
@@ -347,7 +342,8 @@ impl<D: BlockDevice> Tinyfs<D> {
             match inode.kind {
                 InodeKind::Free => return Err(FsError::Corrupt),
                 InodeKind::File => {
-                    for b in self.inode_blocks(idx)? {
+                    let (data, meta) = self.inode_block_lists(idx)?;
+                    for b in data.into_iter().chain(meta) {
                         self.check_range(b)?;
                     }
                 }
@@ -422,41 +418,73 @@ impl<D: BlockDevice> Tinyfs<D> {
         Err(FsError::NoInodes)
     }
 
-    /// Data blocks of an inode, in order (excluding the indirect table block).
-    fn inode_blocks(&mut self, idx: usize) -> Result<Vec<u64>, FsError> {
+    /// Read `count` block pointers out of pointer block `blk`.
+    fn read_ptr_block(&mut self, blk: u64, count: usize, out: &mut Vec<u64>) -> Result<(), FsError> {
+        if blk == 0 {
+            return Err(FsError::Corrupt);
+        }
+        self.check_range(blk)?;
+        let mut block = vec![0u8; BLOCK_SIZE];
+        self.dev.read_block(blk, &mut block)?;
+        for i in 0..count {
+            let b = u64::from_le_bytes(block[i * 8..i * 8 + 8].try_into().unwrap());
+            if b == 0 {
+                return Err(FsError::Corrupt);
+            }
+            out.push(b);
+        }
+        Ok(())
+    }
+
+    /// Write `ptrs` (≤ 512) into a freshly allocated pointer block.
+    fn write_ptr_block(&mut self, ptrs: &[u64]) -> Result<u64, FsError> {
+        let blk = self.alloc_block()?;
+        let mut block = vec![0u8; BLOCK_SIZE];
+        for (i, &p) in ptrs.iter().enumerate() {
+            block[i * 8..i * 8 + 8].copy_from_slice(&p.to_le_bytes());
+        }
+        self.dev.write_block(blk, &block)?;
+        Ok(blk)
+    }
+
+    /// An inode's data blocks (in order) and its metadata blocks (the
+    /// single-indirect table, the double-indirect table and its L2 tables).
+    fn inode_block_lists(&mut self, idx: usize) -> Result<(Vec<u64>, Vec<u64>), FsError> {
         let inode = self.inodes[idx];
         let n = (inode.size as usize).div_ceil(BLOCK_SIZE);
         if n > MAX_FILE_BLOCKS {
             return Err(FsError::Corrupt);
         }
-        let mut out = Vec::with_capacity(n);
+        let mut data = Vec::with_capacity(n);
+        let mut meta = Vec::new();
         for i in 0..n.min(DIRECT_PTRS) {
             if inode.direct[i] == 0 {
                 return Err(FsError::Corrupt);
             }
-            out.push(inode.direct[i]);
+            data.push(inode.direct[i]);
         }
         if n > DIRECT_PTRS {
-            if inode.indirect == 0 {
-                return Err(FsError::Corrupt);
-            }
-            self.check_range(inode.indirect)?;
-            let mut block = vec![0u8; BLOCK_SIZE];
-            self.dev.read_block(inode.indirect, &mut block)?;
-            for i in 0..n - DIRECT_PTRS {
-                let b = u64::from_le_bytes(block[i * 8..i * 8 + 8].try_into().unwrap());
-                if b == 0 {
-                    return Err(FsError::Corrupt);
-                }
-                out.push(b);
+            let take = (n - DIRECT_PTRS).min(PTRS_PER_BLOCK);
+            meta.push(inode.indirect);
+            self.read_ptr_block(inode.indirect, take, &mut data)?;
+        }
+        if n > DIRECT_PTRS + PTRS_PER_BLOCK {
+            let rem = n - DIRECT_PTRS - PTRS_PER_BLOCK;
+            let mut l2 = Vec::new();
+            meta.push(inode.dindirect);
+            self.read_ptr_block(inode.dindirect, rem.div_ceil(PTRS_PER_BLOCK), &mut l2)?;
+            for (i, &b) in l2.iter().enumerate() {
+                let take = (rem - i * PTRS_PER_BLOCK).min(PTRS_PER_BLOCK);
+                meta.push(b);
+                self.read_ptr_block(b, take, &mut data)?;
             }
         }
-        Ok(out)
+        Ok((data, meta))
     }
 
     fn read_file(&mut self, idx: usize) -> Result<Vec<u8>, FsError> {
         let size = self.inodes[idx].size as usize;
-        let blocks = self.inode_blocks(idx)?;
+        let (blocks, _) = self.inode_block_lists(idx)?;
         let mut out = Vec::with_capacity(size);
         let mut block = vec![0u8; BLOCK_SIZE];
         for b in blocks {
@@ -479,18 +507,12 @@ impl<D: BlockDevice> Tinyfs<D> {
         }
         let n = data.len().div_ceil(BLOCK_SIZE);
 
-        let old_blocks = self.inode_blocks(idx)?;
-        let old_indirect = self.inodes[idx].indirect;
+        let (old_data, old_meta) = self.inode_block_lists(idx)?;
 
         let mut new_blocks = Vec::with_capacity(n);
         for _ in 0..n {
             new_blocks.push(self.alloc_block()?);
         }
-        let new_indirect = if n > DIRECT_PTRS {
-            self.alloc_block()?
-        } else {
-            0
-        };
 
         let mut block = vec![0u8; BLOCK_SIZE];
         for (i, &b) in new_blocks.iter().enumerate() {
@@ -500,13 +522,24 @@ impl<D: BlockDevice> Tinyfs<D> {
             block[..end - start].copy_from_slice(&data[start..end]);
             self.dev.write_block(b, &block)?;
         }
-        if new_indirect != 0 {
-            block.fill(0);
-            for (i, &b) in new_blocks[DIRECT_PTRS..].iter().enumerate() {
-                block[i * 8..i * 8 + 8].copy_from_slice(&b.to_le_bytes());
+
+        let new_indirect = if n > DIRECT_PTRS {
+            let end = n.min(DIRECT_PTRS + PTRS_PER_BLOCK);
+            let ptrs = new_blocks[DIRECT_PTRS..end].to_vec();
+            self.write_ptr_block(&ptrs)?
+        } else {
+            0
+        };
+        let new_dindirect = if n > DIRECT_PTRS + PTRS_PER_BLOCK {
+            let rest = new_blocks[DIRECT_PTRS + PTRS_PER_BLOCK..].to_vec();
+            let mut l2 = Vec::with_capacity(rest.len().div_ceil(PTRS_PER_BLOCK));
+            for chunk in rest.chunks(PTRS_PER_BLOCK) {
+                l2.push(self.write_ptr_block(chunk)?);
             }
-            self.dev.write_block(new_indirect, &block)?;
-        }
+            self.write_ptr_block(&l2)?
+        } else {
+            0
+        };
 
         let inode = &mut self.inodes[idx];
         inode.direct = [0; DIRECT_PTRS];
@@ -514,14 +547,13 @@ impl<D: BlockDevice> Tinyfs<D> {
             inode.direct[i] = b;
         }
         inode.indirect = new_indirect;
+        inode.dindirect = new_dindirect;
         inode.size = data.len() as u64;
         inode.mtime_ms = (self.now_ms)();
         self.itab_dirty[idx / INODES_PER_BLOCK] = true;
 
-        self.pending_free.extend(old_blocks);
-        if old_indirect != 0 {
-            self.pending_free.push(old_indirect);
-        }
+        self.pending_free.extend(old_data);
+        self.pending_free.extend(old_meta);
         Ok(())
     }
 
@@ -532,12 +564,9 @@ impl<D: BlockDevice> Tinyfs<D> {
                 self.free_tree(d.ino as usize)?;
             }
         }
-        let blocks = self.inode_blocks(idx)?;
-        self.pending_free.extend(blocks);
-        if self.inodes[idx].indirect != 0 {
-            let ind = self.inodes[idx].indirect;
-            self.pending_free.push(ind);
-        }
+        let (data, meta) = self.inode_block_lists(idx)?;
+        self.pending_free.extend(data);
+        self.pending_free.extend(meta);
         self.inodes[idx] = Inode::empty();
         self.itab_dirty[idx / INODES_PER_BLOCK] = true;
         Ok(())

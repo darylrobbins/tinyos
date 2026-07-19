@@ -22,10 +22,11 @@ pub const INODE_SIZE: usize = 128;
 pub const INODES_PER_BLOCK: usize = BLOCK_SIZE / INODE_SIZE; // 32
 pub const ITAB_BLOCKS: usize = INODE_COUNT / INODES_PER_BLOCK; // 128
 
-pub const DIRECT_PTRS: usize = 12;
+pub const DIRECT_PTRS: usize = 11;
 pub const PTRS_PER_BLOCK: usize = BLOCK_SIZE / 8; // 512
-pub const MAX_FILE_BLOCKS: usize = DIRECT_PTRS + PTRS_PER_BLOCK; // 524
-pub const MAX_FILE_SIZE: u64 = (MAX_FILE_BLOCKS * BLOCK_SIZE) as u64; // ~2 MiB
+/// 11 direct + 512 single-indirect + 512*512 double-indirect = 262,667.
+pub const MAX_FILE_BLOCKS: usize = DIRECT_PTRS + PTRS_PER_BLOCK + PTRS_PER_BLOCK * PTRS_PER_BLOCK;
+pub const MAX_FILE_SIZE: u64 = (MAX_FILE_BLOCKS * BLOCK_SIZE) as u64; // ~1 GiB
 
 pub const DIRENT_SIZE: usize = 64;
 pub const MAX_NAME: usize = 56;
@@ -224,7 +225,7 @@ impl Checkpoint {
 
 // -- inode (128 bytes, 32 per table block) -------------------------------------
 // kind u16 @0, flags u16 @2, size u64 @8, mtime_ms u64 @16,
-// direct [u64;12] @24, indirect u64 @120.
+// direct [u64;11] @24, indirect u64 @112, dindirect u64 @120.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Inode {
@@ -233,6 +234,8 @@ pub struct Inode {
     pub mtime_ms: u64,
     pub direct: [u64; DIRECT_PTRS],
     pub indirect: u64,
+    /// Block of 512 pointers to blocks of 512 data pointers.
+    pub dindirect: u64,
 }
 
 impl Inode {
@@ -243,6 +246,7 @@ impl Inode {
             mtime_ms: 0,
             direct: [0; DIRECT_PTRS],
             indirect: 0,
+            dindirect: 0,
         }
     }
 
@@ -255,7 +259,8 @@ impl Inode {
         for (i, &b) in self.direct.iter().enumerate() {
             w64(buf, 24 + i * 8, b);
         }
-        w64(buf, 120, self.indirect);
+        w64(buf, 112, self.indirect);
+        w64(buf, 120, self.dindirect);
     }
 
     pub fn decode(buf: &[u8]) -> Result<Self, FsError> {
@@ -270,7 +275,8 @@ impl Inode {
             size: r64(buf, 8),
             mtime_ms: r64(buf, 16),
             direct,
-            indirect: r64(buf, 120),
+            indirect: r64(buf, 112),
+            dindirect: r64(buf, 120),
         })
     }
 }

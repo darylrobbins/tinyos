@@ -58,7 +58,7 @@ fn dirs_and_relative_paths() {
 #[test]
 fn large_file_uses_indirect_blocks() {
     let mut fs = fresh();
-    // 100 blocks worth: well past the 12 direct pointers.
+    // 100 blocks worth: well past the 11 direct pointers.
     let data: Vec<u8> = (0..409_600usize).map(|i| (i % 251) as u8).collect();
     fs.write("/", "/big.bin", &data, false).unwrap();
     assert_eq!(fs.read("/", "/big.bin").unwrap(), data);
@@ -77,13 +77,49 @@ fn large_file_uses_indirect_blocks() {
 }
 
 #[test]
-fn file_too_big() {
+fn double_indirect_boundary() {
+    const BS: usize = 4096;
+    const SINGLE_MAX: usize = 11 + 512; // blocks coverable without dindirect
     let mut fs = Tinyfs::format(MemDevice::new(4096)).unwrap();
-    let data = vec![0u8; MAX_FILE_SIZE as usize + 1];
-    assert_eq!(
-        fs.write("/", "/huge", &data, false),
-        Err(FsError::FileTooBig)
-    );
+
+    // Exactly at the single-indirect limit: no double-indirect tree.
+    let data: Vec<u8> = (0..SINGLE_MAX * BS).map(|i| (i % 253) as u8).collect();
+    fs.write("/", "/edge.bin", &data, false).unwrap();
+    let used_single = fs.stats().used_blocks;
+
+    // One byte over: crosses into double-indirect (one more data block,
+    // plus the L1 and one L2 pointer block).
+    fs.write("/", "/edge.bin", &[&data[..], &[0xAB][..]].concat(), false)
+        .unwrap();
+    assert_eq!(fs.stats().used_blocks, used_single + 3);
+    let back = fs.read("/", "/edge.bin").unwrap();
+    assert_eq!(back.len(), SINGLE_MAX * BS + 1);
+    assert_eq!(*back.last().unwrap(), 0xAB);
+    assert_eq!(&back[..data.len()], &data[..]);
+    fs.check().unwrap();
+
+    // Well into the L2 tree (600 blocks), remount, verify, delete, reclaim.
+    let data: Vec<u8> = (0..600 * BS).map(|i| (i % 249) as u8).collect();
+    fs.write("/", "/edge.bin", &data, false).unwrap();
+    let mut fs = Tinyfs::mount(fs.into_inner()).unwrap();
+    assert_eq!(fs.read("/", "/edge.bin").unwrap(), data);
+    fs.check().unwrap();
+    let free_before = fs.stats().free_blocks;
+    fs.remove("/", "/edge.bin", false).unwrap();
+    assert!(fs.stats().free_blocks >= free_before + 600);
+    fs.check().unwrap();
+}
+
+#[test]
+fn file_too_big() {
+    // ~1 GiB limit: 11 direct + 512 single + 512*512 double-indirect blocks.
+    // (Exercising FileTooBig for real would need a >1 GiB buffer; the
+    // boundary test above covers the tree shape, so pin the constant and
+    // check that an over-device write fails as NoSpace before corruption.)
+    assert_eq!(MAX_FILE_SIZE, (11 + 512 + 512 * 512) as u64 * 4096);
+    let mut fs = Tinyfs::format(MemDevice::new(256)).unwrap();
+    let data = vec![0u8; 300 * 4096]; // > device, < MAX_FILE_SIZE
+    assert_eq!(fs.write("/", "/huge", &data, false), Err(FsError::NoSpace));
 }
 
 #[test]

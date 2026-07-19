@@ -44,8 +44,8 @@ block 3..    CoW-allocated  inode-table blocks, indirect blocks, data
 ```
 
 - **Inodes:** 4096 × 128 B (32 per table block). kind (file/dir), size,
-  mtime_ms, 12 direct + 1 single-indirect pointer block → max file ~2 MiB.
-  Inode 1 is the root directory.
+  mtime_ms, 11 direct + 1 single-indirect + 1 double-indirect pointer block
+  (11 + 512 + 512² blocks) → max file ~1 GiB. Inode 1 is the root directory.
 - **Directories:** file content is packed 64 B dirents (ino u32, kind, name
   ≤ 56 bytes), linear scan, compacted on remove.
 - **Free space:** no on-disk allocator state. In-RAM bitmap rebuilt at mount;
@@ -72,7 +72,7 @@ block 3..    CoW-allocated  inode-table blocks, indirect blocks, data
 
 ## Deferred
 
-- Double-indirect blocks (files > ~2 MiB), data-block checksums, block
+- Data-block checksums, block
   cache, batched commits, hard links, permissions/ownership, timestamps
   beyond mtime, WaitQueue-based async IO (requires moving the FS off spin
   locks). GC-free is permanent by design, not deferred.

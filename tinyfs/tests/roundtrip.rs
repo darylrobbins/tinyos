@@ -57,8 +57,9 @@ fn inode_roundtrip() {
     inode.size = 123456;
     inode.mtime_ms = 987654321;
     inode.direct[0] = 10;
-    inode.direct[11] = 21;
+    inode.direct[10] = 21;
     inode.indirect = 300;
+    inode.dindirect = 301;
     let mut buf = vec![0u8; INODE_SIZE];
     inode.encode(&mut buf);
     assert_eq!(Inode::decode(&buf).unwrap(), inode);
