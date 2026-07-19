@@ -143,7 +143,8 @@ fn kmain(mut fb: FbInfo, memory_map: MemoryMapOwned) -> ! {
     kprintln!("tinyos: splash done (uptime {} ms)", arch::timer::uptime_ms());
 
     FB_SIZE.call_once(|| (fb.width, fb.height));
-    let input = drivers::input::Input::init();
+    let (input, blk) = drivers::probe();
+    fs::init(blk);
     arch::irq::init();
     kprintln!("tinyos: starting scheduler on cpu{}", arch::cpu_id());
 

@@ -10,3 +10,4 @@ spin = "0.9"
 log = "0.4"
 fontdue = { version = "0.9", default-features = false, features = ["hashbrown"] }
 libm = "0.2"
+tinyfs = { path = "../tinyfs" }

@@ -33,6 +33,9 @@ $(error unsupported ARCH '$(ARCH)')
 endif
 
 KERNEL_EFI  := target/$(TARGET)/$(PROFILE)/kernel.efi
+DISK        := disk.img
+DISK_SIZE   := 64M
+MKFS        := target/debug/mkfs-tinyfs
 
 # Window scaling (View menu also has Zoom to Fit); headless runs override this.
 DISPLAY_ARG := -display cocoa,zoom-to-fit=on
@@ -42,28 +45,45 @@ QEMU_ARGS    = $(MACHINE) -m 512M $(ACCEL) $(FLASH) \
     -device virtio-keyboard-pci \
     -device virtio-tablet-pci \
     -drive format=raw,file=fat:rw:$(ESP) \
+    -drive if=none,file=$(DISK),format=raw,id=hd \
+    -device virtio-blk-pci,drive=hd,disable-legacy=on,disable-modern=off \
     -fw_cfg name=opt/tinyos/res,string=$(RES) \
     -serial stdio
 
 run: QEMU_ARGS += $(DISPLAY_ARG)
 
-.PHONY: build apps run gdb clean firmware
+.PHONY: build apps run gdb clean cleandisk firmware mkfs test
 
+# Never `cargo build --target ...` at the workspace root: mkfs-tinyfs is a
+# host-target std binary and would fail to cross-compile for UEFI.
 build: apps
-	cargo build --target $(TARGET) $(if $(filter release,$(PROFILE)),--release,)
+	cargo build -p kernel --target $(TARGET) $(if $(filter release,$(PROFILE)),--release,)
 	mkdir -p $(ESP)/EFI/BOOT
 	cp $(KERNEL_EFI) $(ESP)/EFI/BOOT/$(BOOT_EFI)
 
-# Third-party apps: a separate workspace (aarch64-unknown-none), copied into
-# the ESP so the kernel loads them at runtime. Independent of the kernel
-# build. aarch64 only for now (userspace is aarch64-first).
+# Third-party userspace apps: a separate workspace (aarch64-unknown-none),
+# staged under $(STAGE)/apps and baked into the tinyfs image when the disk is
+# created (see $(DISK) below). aarch64 only for now (userspace is aarch64-first).
 APP_BINS := hello pixels
+STAGE    := $(BUILD)/stage
 apps:
 ifeq ($(ARCH),aarch64)
 	cd apps && cargo build --release
-	mkdir -p $(ESP)/apps
-	$(foreach a,$(APP_BINS),cp apps/target/aarch64-unknown-none/release/$(a) $(ESP)/apps/$(a);)
+	mkdir -p $(STAGE)/apps
+	$(foreach a,$(APP_BINS),cp apps/target/aarch64-unknown-none/release/$(a) $(STAGE)/apps/$(a);)
 endif
+
+mkfs:
+	cargo build -p mkfs-tinyfs
+
+# Created only if missing so its contents persist across runs (`make cleandisk`
+# resets it, re-baking the apps currently staged in $(STAGE)). After rebuilding
+# an app, `make cleandisk` to refresh /apps in the image.
+$(DISK): | mkfs apps
+	$(MKFS) create $(DISK) --size $(DISK_SIZE) $(if $(wildcard $(STAGE)/*),--populate $(STAGE),)
+
+test:
+	cargo test -p tinyfs
 
 firmware:
 	mkdir -p $(BUILD)
@@ -72,12 +92,16 @@ ifeq ($(ARCH),aarch64)
 	dd if=/dev/zero of=$(BUILD)/vars-$(ARCH).fd bs=1m count=64 2>/dev/null
 endif
 
-run: build firmware
+run: build firmware $(DISK)
 	$(QEMU) $(QEMU_ARGS)
 
-gdb: build firmware
+gdb: build firmware $(DISK)
 	$(QEMU) $(QEMU_ARGS) -s -S
 
+# Keeps disk.img; use cleandisk to reset the filesystem.
 clean:
 	cargo clean
 	rm -rf $(ESP) $(BUILD)
+
+cleandisk:
+	rm -f $(DISK)

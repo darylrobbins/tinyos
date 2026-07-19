@@ -24,8 +24,16 @@ interrupt-driven, no processes (yet), no problems.
   desktop stays smooth on core 0.
 - virtio-input drivers (keyboard + tablet); fontdue-rasterized Geist and
   Geist Mono.
+- **tinyfs**, a native copy-on-write filesystem on virtio-blk: shadow-paging
+  checkpoints (crash-consistent by construction — no journal, no fsck, no
+  GC), files persist across reboots in `disk.img`, same image mounts on both
+  arches. Comes with a host-side `mkfs-tinyfs` tool and `cargo test -p tinyfs`
+  unit + crash-consistency tests.
 - Shell built-ins: `help`, `echo`, `clear`, `sysinfo`, `memstat`, `uptime`,
-  `date`, `spin`, `ps`, `kill`, `about` (and one you'll find on your own).
+  `date`, `spin`, `ps`, `kill`, `about` (and one you'll find on your own),
+  plus files: `ls`, `cat`, `write`, `append`, `mkdir`, `rm`, `mv`, `cd`,
+  `pwd`, `fsinfo` — and `shutdown` / `reboot` (sync the disk, then PSCI
+  SYSTEM_OFF/RESET on arm64, ACPI S5 / reset port on x86_64).
 
 | | |
 |---|---|
@@ -58,10 +66,13 @@ kernel/src/
   arch/aarch64/  vectors, GICv3, generic timer, PSCI SMP, context switch, PL011
   arch/x86_64/   IDT, LAPIC/IOAPIC, TSC timer, MP-services SMP, context switch
   mem/           heap over the UEFI memory map
-  drivers/       PCI ECAM, virtio-pci transport, virtio-input
+  drivers/       PCI ECAM, virtio-pci transport, virtio-input, virtio-blk
+  fs/            mounted-filesystem singleton + shell-facing wrappers
   gfx/           software surface, blending, blur, fontdue glyph cache
   ui/            splash, wallpaper, desktop shell, cursor
   term/          terminal widget + built-in shell
+tinyfs/          the filesystem itself: no_std core, host-testable
+tools/mkfs-tinyfs/  host tool: create/populate/inspect/check disk images
 ```
 
 Design doc: `docs/superpowers/specs/2026-07-17-tinyos-design.md`.

@@ -22,9 +22,7 @@ const DIM: u32 = rgb(0x5f, 0x68, 0x79);
 const ERR: u32 = rgb(0xff, 0x9e, 0x9e);
 
 const PROMPT_USER: &str = "daryl@tinyos";
-const PROMPT_PATH: &str = " ~ ";
 const PROMPT_CHEVRON: &str = "> ";
-const PROMPT: &str = "daryl@tinyos ~ > ";
 const SCROLLBACK: usize = 400;
 
 pub struct Terminal {
@@ -35,6 +33,7 @@ pub struct Terminal {
     cursor: usize,
     history: Vec<String>,
     hist_idx: Option<usize>,
+    cwd: String,
     /// A foreground app launched via `run`, if any.
     running: Option<RunningApp>,
 }
@@ -56,10 +55,16 @@ impl Terminal {
             cursor: 0,
             history: Vec::new(),
             hist_idx: None,
+            cwd: "/".to_string(),
             running: None,
         };
         t.out(format!("tinyOS {VERSION} - type 'help' to get started"), DIM);
         t
+    }
+
+    /// Prompt path segment, spaces included (" / ", " /notes ").
+    fn prompt_path(&self) -> String {
+        format!(" {} ", self.cwd)
     }
 
     fn out(&mut self, s: String, color: u32) {
@@ -132,7 +137,11 @@ impl Terminal {
 
     fn execute(&mut self) {
         let cmd = self.input.trim().to_string();
-        let echo = format!("{PROMPT}{}", self.input);
+        let echo = format!(
+            "{PROMPT_USER}{}{PROMPT_CHEVRON}{}",
+            self.prompt_path(),
+            self.input
+        );
         self.out(echo, DIM);
         self.input.clear();
         self.cursor = 0;
@@ -156,13 +165,24 @@ impl Terminal {
                     ("uptime", "time since boot"),
                     ("date", "current date and time"),
                     ("spin [n]", "spawn n busy threads on cores 1-3"),
-                    ("ls [path]", "list files on the ESP volume"),
-                    ("run <name>", "run an app from /apps"),
                     ("ps", "list threads and processes"),
                     ("kill <id>", "stop a thread"),
+                    ("run <name>", "run an app from /apps"),
+                    ("ls [path]", "list directory"),
+                    ("cat <file>", "print file contents"),
+                    ("write <file> <text>", "write text to a file"),
+                    ("append <file> <text>", "append text to a file"),
+                    ("mkdir <dir>", "create a directory"),
+                    ("rm [-r] <path>", "remove a file or directory"),
+                    ("mv <from> <to>", "move or rename"),
+                    ("cd [dir]", "change directory"),
+                    ("pwd", "print working directory"),
+                    ("fsinfo", "filesystem usage"),
+                    ("shutdown", "sync disk and power off"),
+                    ("reboot", "sync disk and restart"),
                     ("about", "about tinyOS"),
                 ] {
-                    self.out(format!("  {c:<14} {d}"), FG);
+                    self.out(format!("  {c:<22} {d}"), FG);
                 }
             }
             "echo" => self.out(rest.to_string(), FG),
@@ -237,22 +257,110 @@ impl Terminal {
                 Err(_) => self.out("usage: kill <id>".to_string(), ERR),
             },
             "ls" => {
-                let path = rest.trim();
-                match crate::fs::list(path) {
-                    Some(entries) if entries.is_empty() => self.out("(empty)".to_string(), DIM),
-                    Some(mut entries) => {
-                        entries.sort_by(|a, b| (b.2, &a.0).cmp(&(a.2, &b.0)));
-                        for (name, size, is_dir) in entries {
-                            if is_dir {
-                                self.out(format!("{name}/"), ACCENT);
-                            } else {
-                                self.out(format!("{name:<24} {size}"), FG);
+                let path = if rest.trim().is_empty() { "." } else { rest.trim() };
+                match crate::fs::list(&self.cwd, path) {
+                    Ok(entries) if entries.is_empty() => {}
+                    Ok(entries) => {
+                        for e in entries {
+                            match e.kind {
+                                tinyfs::InodeKind::Dir => {
+                                    self.out(format!("{:>10}  {}/", "-", e.name), ACCENT)
+                                }
+                                _ => self.out(format!("{:>10}  {}", e.size, e.name), FG),
                             }
                         }
                     }
-                    None => self.out(format!("ls: cannot access '{path}'"), ERR),
+                    Err(e) => self.out(format!("ls: {e}"), ERR),
                 }
             }
+            "cat" => match crate::fs::read(&self.cwd, rest.trim()) {
+                Ok(data) => match core::str::from_utf8(&data) {
+                    Ok(text) => {
+                        for line in text.lines() {
+                            self.out(line.to_string(), FG);
+                        }
+                    }
+                    Err(_) => self.out(format!("cat: binary file ({} bytes)", data.len()), DIM),
+                },
+                Err(e) => self.out(format!("cat: {e}"), ERR),
+            },
+            "write" | "append" => match rest.trim().split_once(' ') {
+                Some((file, text)) => {
+                    let append = name == "append";
+                    match crate::fs::write(&self.cwd, file, text.as_bytes(), append) {
+                        Ok(()) => {}
+                        Err(e) => self.out(format!("{name}: {e}"), ERR),
+                    }
+                }
+                None => self.out(format!("usage: {name} <file> <text>"), ERR),
+            },
+            "mkdir" => match crate::fs::mkdir(&self.cwd, rest.trim()) {
+                Ok(()) => {}
+                Err(e) => self.out(format!("mkdir: {e}"), ERR),
+            },
+            "rm" => {
+                let (recursive, path) = match rest.trim().strip_prefix("-r ") {
+                    Some(p) => (true, p.trim()),
+                    None => (false, rest.trim()),
+                };
+                if path.is_empty() {
+                    self.out("usage: rm [-r] <path>".to_string(), ERR);
+                } else if let Err(e) = crate::fs::remove(&self.cwd, path, recursive) {
+                    self.out(format!("rm: {e}"), ERR);
+                }
+            }
+            "mv" => match rest.trim().split_once(' ') {
+                Some((from, to)) => {
+                    if let Err(e) = crate::fs::rename(&self.cwd, from.trim(), to.trim()) {
+                        self.out(format!("mv: {e}"), ERR);
+                    }
+                }
+                None => self.out("usage: mv <from> <to>".to_string(), ERR),
+            },
+            "cd" => {
+                let path = if rest.trim().is_empty() { "/" } else { rest.trim() };
+                match crate::fs::resolve_dir(&self.cwd, path) {
+                    Ok(canon) => self.cwd = canon,
+                    Err(e) => self.out(format!("cd: {e}"), ERR),
+                }
+            }
+            "pwd" => {
+                let cwd = self.cwd.clone();
+                self.out(cwd, FG);
+            }
+            "fsinfo" | "df" => match crate::fs::stats() {
+                Ok(st) => {
+                    let block_kib = (tinyfs::BLOCK_SIZE / 1024) as u64;
+                    let lines = [
+                        format!("tinyfs on /dev/vda, generation {}", st.generation),
+                        format!(
+                            "blocks:  {} used / {} total ({} KiB / {} KiB)",
+                            st.used_blocks,
+                            st.total_blocks,
+                            st.used_blocks * block_kib,
+                            st.total_blocks * block_kib
+                        ),
+                        format!("inodes:  {} used / {} total", st.inodes_used, st.inodes_total),
+                    ];
+                    for l in lines {
+                        self.out(l, FG);
+                    }
+                }
+                Err(e) => self.out(format!("fsinfo: {e}"), ERR),
+            },
+            "shutdown" | "poweroff" | "halt" | "reboot" => match crate::fs::sync() {
+                Ok(()) => {
+                    kprintln!("tinyos: {name}: filesystem synced, going down");
+                    if name == "reboot" {
+                        crate::arch::reboot()
+                    } else {
+                        crate::arch::poweroff()
+                    }
+                }
+                // A failed sync is the one case where powering off could
+                // lose the device cache: refuse and leave the OS running.
+                Err(e) => self.out(format!("{name}: sync failed ({e}), aborting"), ERR),
+            },
             "run" => self.run_app(rest.trim()),
             "usertest" => self.usertest(rest.trim()),
             "objtest" => {
@@ -290,9 +398,12 @@ impl Terminal {
         #[cfg(target_arch = "aarch64")]
         {
             let path = format!("/apps/{name}");
-            let Some(elf) = crate::fs::read(&path) else {
-                self.out(format!("run: {name}: not found in /apps"), ERR);
-                return;
+            let elf = match crate::fs::read("/", &path) {
+                Ok(elf) => elf,
+                Err(e) => {
+                    self.out(format!("run: {name}: {e}"), ERR);
+                    return;
+                }
             };
             match crate::obj::loader::spawn(name.to_string(), &elf, &argv) {
                 Ok(app) => {
@@ -379,12 +490,13 @@ impl Terminal {
 
         // Prompt line with block cursor: user teal, path dim, chevron teal.
         let y = oy + row as i32 * CELL_H;
+        let path = self.prompt_path();
         fonts.mono.draw(surface, PROMPT_USER, 15.0, ox, y, ACCENT);
         let path_x = ox + PROMPT_USER.len() as i32 * CELL_W;
-        fonts.mono.draw(surface, PROMPT_PATH, 15.0, path_x, y, DIM);
-        let chev_x = path_x + PROMPT_PATH.len() as i32 * CELL_W;
+        fonts.mono.draw(surface, &path, 15.0, path_x, y, DIM);
+        let chev_x = path_x + path.len() as i32 * CELL_W;
         fonts.mono.draw(surface, PROMPT_CHEVRON, 15.0, chev_x, y, ACCENT);
-        let px = ox + PROMPT.len() as i32 * CELL_W;
+        let px = chev_x + PROMPT_CHEVRON.len() as i32 * CELL_W;
         fonts.mono.draw(surface, &self.input, 15.0, px, y, FG);
 
         if crate::ui::shell::caret_on(now_ms) {

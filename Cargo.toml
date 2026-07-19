@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["kernel"]
+members = ["kernel", "tinyfs", "tools/mkfs-tinyfs"]
 
 [profile.release]
 lto = true

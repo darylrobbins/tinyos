@@ -143,23 +143,24 @@ pub fn boot_hook() {
             // Spawn hello directly (no watchdog), let it exit; UI heartbeat
             // tells us if the system survives teardown.
             let argv = [alloc::string::String::from("a"), alloc::string::String::from("b")];
-            match crate::fs::read("/apps/hello") {
-                Some(elf) => match super::loader::spawn(alloc::string::String::from("hello"), &elf, &argv) {
+            match crate::fs::read("/", "/apps/hello") {
+                Ok(elf) => match super::loader::spawn(alloc::string::String::from("hello"), &elf, &argv) {
                     Ok(app) => kprintln!("tinyos: spawnonly thread {}", app.thread_id),
                     Err(e) => kprintln!("tinyos: spawnonly FAILED {}", e.msg()),
                 },
-                None => kprintln!("tinyos: spawnonly no hello"),
+                Err(e) => kprintln!("tinyos: spawnonly no hello ({e})"),
             }
         }
         Some("fs") => {
             for path in ["/", "/apps"] {
-                match crate::fs::list(path) {
-                    Some(entries) => {
-                        for (name, size, is_dir) in entries {
-                            kprintln!("tinyos: fstest {path} -> {name}{} {size}", if is_dir { "/" } else { "" });
+                match crate::fs::list("/", path) {
+                    Ok(entries) => {
+                        for e in entries {
+                            let slash = if matches!(e.kind, tinyfs::InodeKind::Dir) { "/" } else { "" };
+                            kprintln!("tinyos: fstest {path} -> {}{slash} {}", e.name, e.size);
                         }
                     }
-                    None => kprintln!("tinyos: fstest {path} FAILED"),
+                    Err(err) => kprintln!("tinyos: fstest {path} FAILED ({err})"),
                 }
             }
         }
@@ -186,10 +187,10 @@ fn run_hello_once() {
         alloc::string::String::from("beta"),
         alloc::string::String::from("gamma"),
     ];
-    let elf = match crate::fs::read("/apps/hello") {
-        Some(e) => e,
-        None => {
-            kprintln!("tinyos: runtest FAILED: /apps/hello not found");
+    let elf = match crate::fs::read("/", "/apps/hello") {
+        Ok(e) => e,
+        Err(err) => {
+            kprintln!("tinyos: runtest FAILED: /apps/hello: {err}");
             return;
         }
     };

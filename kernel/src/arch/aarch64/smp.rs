@@ -9,6 +9,8 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use crate::arch::MAX_CPUS;
 
 const PSCI_VERSION: u32 = 0x8400_0000;
+const PSCI_SYSTEM_OFF: u32 = 0x8400_0008;
+const PSCI_SYSTEM_RESET: u32 = 0x8400_0009;
 const PSCI_CPU_ON64: u32 = 0xC400_0003;
 
 macro_rules! read_sysreg {
@@ -33,6 +35,18 @@ struct ApBoot {
 }
 
 static AP_ONLINE: AtomicU32 = AtomicU32::new(0);
+
+/// PSCI SYSTEM_OFF: powers off the whole machine, all cores.
+pub fn system_off() -> ! {
+    psci_call(PSCI_SYSTEM_OFF, 0, 0, 0);
+    super::park() // unreachable unless firmware refuses
+}
+
+/// PSCI SYSTEM_RESET: cold reboot.
+pub fn system_reset() -> ! {
+    psci_call(PSCI_SYSTEM_RESET, 0, 0, 0);
+    super::park()
+}
 
 fn psci_call(func: u32, a1: u64, a2: u64, a3: u64) -> i64 {
     let ret: i64;
