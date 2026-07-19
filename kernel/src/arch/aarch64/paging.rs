@@ -94,7 +94,9 @@ impl AddrSpace {
 
     /// Walk to the L3 entry for `va`, creating tables as needed.
     fn entry(&mut self, va: u64) -> Option<*mut u64> {
-        debug_assert!((USER_BASE..USER_BASE + USER_SIZE).contains(&va));
+        // The user window ends exactly at 2^64, so `USER_BASE + USER_SIZE`
+        // overflows; compare via the offset instead.
+        debug_assert!(va >= USER_BASE && va - USER_BASE < USER_SIZE);
         let l1i = ((va >> 30) & 0xF) as usize;
         let l2i = ((va >> 21) & 0x1FF) as usize;
         let l3i = ((va >> 12) & 0x1FF) as usize;
