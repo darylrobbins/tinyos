@@ -41,6 +41,18 @@ impl AddrSpace {
         0
     }
 
+    pub fn mapped_bytes(&self) -> usize {
+        0
+    }
+
+    pub fn unmap(&mut self, _va: u64) -> Option<(usize, u64)> {
+        None
+    }
+
+    pub fn references_pa_range(&self, _base: usize, _len: usize) -> bool {
+        false
+    }
+
     pub fn user_buf_ok(&self, _va: u64, _len: u64, _write: bool) -> bool {
         false
     }
