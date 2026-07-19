@@ -332,7 +332,11 @@ fn sys_memobj_map(hv: u64, offset: u64, len: u64) -> SysResult {
             _ => return Err(ST_WRONG_TYPE),
         }
     };
-    if offset % FRAME_SIZE as u64 != 0 || len == 0 || offset + len > m.size() as u64 {
+    // offset and len are both user-controlled: a wrapping `offset + len`
+    // would let a huge offset pass the bounds check and then map arbitrary
+    // physical memory via `m.pa() + offset`. Use checked arithmetic.
+    let end = offset.checked_add(len);
+    if offset % FRAME_SIZE as u64 != 0 || len == 0 || end.map_or(true, |e| e > m.size() as u64) {
         return Err(ST_INVALID_ARGS);
     }
     let va = {
