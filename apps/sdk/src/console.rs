@@ -7,6 +7,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::channel::{Channel, Msg};
+use crate::syscall::{SIG_WRITABLE, ST_SHOULD_WAIT};
 
 use abi::console::*;
 
@@ -41,7 +42,24 @@ impl Console {
         let mut msg = Vec::with_capacity(4 + s.len());
         msg.extend_from_slice(&OP_WRITE.to_le_bytes());
         msg.extend_from_slice(s);
-        let _ = self.ch.send(&msg, &[]);
+        // The console channel is bounded (64 msgs / 64 KiB): a burst of
+        // output (e.g. `ps`) fills it faster than the terminal drains on its
+        // frame clock. Block on WRITABLE and retry rather than dropping the
+        // rest of the line — the terminal's pump frees space and wakes us.
+        loop {
+            match self.ch.send(&msg, &[]) {
+                Ok(()) => return,
+                Err(ST_SHOULD_WAIT) => {
+                    let mut it = [crate::wait::WaitItem {
+                        handle: self.ch.0,
+                        want: SIG_WRITABLE,
+                        observed: 0,
+                    }];
+                    let _ = crate::wait::wait_many(&mut it, u64::MAX);
+                }
+                Err(_) => return, // peer gone: drop silently
+            }
+        }
     }
 
     /// Switch input delivery: `INPUT_MODE_LINES` (default; the emulator
