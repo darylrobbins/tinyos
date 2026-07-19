@@ -28,6 +28,8 @@ const OP_OPENED: u32 = 2;
 const OP_CHAR: u32 = 16;
 const OP_KEY: u32 = 17;
 const OP_CLOSE_REQ: u32 = 18;
+const OP_POINTER: u32 = 19;
+const OP_BUTTON: u32 = 20;
 
 /// A spawned userspace process that may open a window. Handed from the
 /// terminal to the shell via `SPAWN_QUEUE`.
@@ -197,6 +199,22 @@ impl App for ExternApp {
         let mut b = OP_KEY.to_le_bytes().to_vec();
         b.extend_from_slice(&code.to_le_bytes());
         b.push(1); // key down
+        self.send(b);
+    }
+    fn wants_pointer(&self) -> bool {
+        true
+    }
+    fn on_pointer_move(&mut self, x: i32, y: i32) {
+        let mut b = OP_POINTER.to_le_bytes().to_vec();
+        b.extend_from_slice(&x.to_le_bytes());
+        b.extend_from_slice(&y.to_le_bytes());
+        self.send(b);
+    }
+    fn on_button(&mut self, down: bool, x: i32, y: i32) {
+        let mut b = OP_BUTTON.to_le_bytes().to_vec();
+        b.push(down as u8);
+        b.extend_from_slice(&x.to_le_bytes());
+        b.extend_from_slice(&y.to_le_bytes());
         self.send(b);
     }
     fn on_close_request(&mut self) {

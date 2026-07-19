@@ -108,6 +108,10 @@ pub struct Shell {
     ctrl: bool,
     left_down: bool,
     drag: Option<(i32, i32, DragKind)>,
+    /// The focused app owns the pointer (body click) until button-up.
+    app_capture: bool,
+    /// Last pointer position delivered to an app; suppresses duplicate moves.
+    last_app_pointer: (i32, i32),
     palette: Palette,
     quick_open: bool,
     locked: bool,
@@ -133,6 +137,8 @@ impl Shell {
             ctrl: false,
             left_down: false,
             drag: None,
+            app_capture: false,
+            last_app_pointer: (-1, -1),
             palette: Palette::new(),
             quick_open: false,
             locked: false,
@@ -233,6 +239,14 @@ impl Shell {
                             }
                         }
                         self.drag = None;
+                        if self.app_capture {
+                            self.app_capture = false;
+                            let (px, py) = self.pointer;
+                            if let Some(win) = self.windows.get_mut(self.focus) {
+                                let b = win.body();
+                                win.app.on_button(false, px - b.x, py - b.y);
+                            }
+                        }
                     }
                     self.left_down = down;
                 }
@@ -264,6 +278,22 @@ impl Shell {
                     let (mw, mh) = win.app.min_size();
                     win.rect.w = (pointer.0 - win.rect.x + dx).clamp(mw, width - win.rect.x - 4);
                     win.rect.h = (pointer.1 - win.rect.y + dy).clamp(mh, height - win.rect.y - 4);
+                }
+            }
+        }
+
+        // Pointer moves for apps that want them: hover inside the focused
+        // window's body, or anywhere while the app has captured the pointer.
+        // Runs once per handle() call, so apps see at most one move per frame.
+        if self.drag.is_none() && self.pointer != self.last_app_pointer {
+            if let Some(win) = self.windows.get_mut(self.focus) {
+                let b = win.body();
+                if !win.hidden
+                    && win.app.wants_pointer()
+                    && (self.app_capture || b.contains(pointer.0, pointer.1))
+                {
+                    win.app.on_pointer_move(pointer.0 - b.x, pointer.1 - b.y);
+                    self.last_app_pointer = pointer;
                 }
             }
         }
@@ -352,6 +382,13 @@ impl Shell {
                 self.drag = Some((r.x + r.w - px, r.y + r.h - py, DragKind::Resize));
             } else if py < r.y + TITLE_H {
                 self.drag = Some((px - r.x, py - r.y, DragKind::Move));
+            } else {
+                let win = &mut self.windows[self.focus];
+                let b = win.body();
+                if win.app.wants_pointer() && b.contains(px, py) {
+                    self.app_capture = true;
+                    win.app.on_button(true, px - b.x, py - b.y);
+                }
             }
             return;
         }

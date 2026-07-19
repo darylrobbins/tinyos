@@ -14,11 +14,18 @@ const OP_PRESENT: u32 = 3;
 const OP_CHAR: u32 = 16;
 const OP_KEY: u32 = 17;
 const OP_CLOSE_REQ: u32 = 18;
+const OP_POINTER: u32 = 19;
+const OP_BUTTON: u32 = 20;
 
 /// An input event delivered by the shell.
 pub enum Event {
     Char(char),
     Key { code: u16, down: bool },
+    /// Pointer moved; window-body-local coords (may fall outside the body
+    /// while the left button is held mid-drag).
+    PointerMoved { x: i32, y: i32 },
+    /// Left button edge; body-local coords.
+    Button { down: bool, x: i32, y: i32 },
     CloseRequested,
 }
 
@@ -94,6 +101,17 @@ impl Window {
                 OP_KEY if m.bytes.len() >= 7 => {
                     let code = u16::from_le_bytes(m.bytes[4..6].try_into().unwrap());
                     out.push(Event::Key { code, down: m.bytes[6] != 0 });
+                }
+                OP_POINTER if m.bytes.len() >= 12 => {
+                    let x = i32::from_le_bytes(m.bytes[4..8].try_into().unwrap());
+                    let y = i32::from_le_bytes(m.bytes[8..12].try_into().unwrap());
+                    out.push(Event::PointerMoved { x, y });
+                }
+                OP_BUTTON if m.bytes.len() >= 13 => {
+                    let down = m.bytes[4] != 0;
+                    let x = i32::from_le_bytes(m.bytes[5..9].try_into().unwrap());
+                    let y = i32::from_le_bytes(m.bytes[9..13].try_into().unwrap());
+                    out.push(Event::Button { down, x, y });
                 }
                 OP_CLOSE_REQ => out.push(Event::CloseRequested),
                 _ => {}

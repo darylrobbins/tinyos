@@ -18,7 +18,10 @@ pub mod alloc_impl;
 pub mod channel;
 pub mod console;
 pub mod entry;
+mod font8x8;
+pub mod gfx;
 pub mod syscall;
+pub mod ui;
 pub mod wait;
 pub mod window;
 

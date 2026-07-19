@@ -44,4 +44,14 @@ pub trait App: core::any::Any {
     /// The shell is closing this window: a host can ask its process to exit
     /// gracefully instead of being torn down immediately.
     fn on_close_request(&mut self) {}
+    /// Apps that consume pointer input inside their body opt in; the shell
+    /// then routes body clicks/moves here instead of ignoring them.
+    fn wants_pointer(&self) -> bool {
+        false
+    }
+    /// Pointer moved; body-local coords (may fall outside the body while the
+    /// app has captured the pointer mid-drag).
+    fn on_pointer_move(&mut self, _x: i32, _y: i32) {}
+    /// Left button edge; body-local coords.
+    fn on_button(&mut self, _down: bool, _x: i32, _y: i32) {}
 }

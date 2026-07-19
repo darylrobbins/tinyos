@@ -1,0 +1,305 @@
+//! Solitaire board layout, hit-testing and rendering (Meridian-styled).
+
+use alloc::format;
+use alloc::vec::Vec;
+use solitaire::{Card, Game, Loc, Suit};
+use tinyos_app::gfx::{self, argb, rgb, with_alpha, Canvas, Rect};
+
+pub const WIN_W: i32 = 920;
+pub const WIN_H: i32 = 640;
+
+pub const CARD_W: i32 = 110;
+pub const CARD_H: i32 = 150;
+const MARGIN: i32 = 15;
+const PITCH: i32 = 125;
+const TOP_Y: i32 = 48;
+const TABLEAU_Y: i32 = 215;
+pub const FAN_UP: i32 = 30;
+pub const FAN_DOWN: i32 = 12;
+
+const CARD_FACE: u32 = gfx::TX; // #e8ecf2
+const INK_BLACK: u32 = rgb(0x1a, 0x1e, 0x26);
+const INK_RED: u32 = rgb(0xb8, 0x4a, 0x4a); // HUE_RED deepened for light cards
+const CARD_BACK: u32 = rgb(0x0e, 0x11, 0x17);
+
+// 16x16 1bpp suit masks, bit 0 = leftmost pixel.
+const HEART: [u16; 16] = [
+    0x3E7C, 0x7FFE, 0x7FFE, 0xFFFF, 0xFFFF, 0x7FFE, 0x7FFE, 0x3FFC, 0x1FF8, 0x0FF0, 0x07E0,
+    0x03C0, 0x0180, 0x0000, 0x0000, 0x0000,
+];
+const DIAMOND: [u16; 16] = [
+    0x0000, 0x0180, 0x0180, 0x03C0, 0x07E0, 0x0FF0, 0x0FF0, 0x1FF8, 0x1FF8, 0x0FF0, 0x0FF0,
+    0x07E0, 0x03C0, 0x0180, 0x0180, 0x0000,
+];
+const SPADE: [u16; 16] = [
+    0x0000, 0x0180, 0x03C0, 0x07E0, 0x0FF0, 0x1FF8, 0x3FFC, 0x7FFE, 0x7FFE, 0xFFFF, 0x7FFE,
+    0x7FFE, 0x0180, 0x03C0, 0x07E0, 0x0FF0,
+];
+const CLUB: [u16; 16] = [
+    0x0000, 0x0180, 0x07E0, 0x07E0, 0x07E0, 0x1FF8, 0x3FFC, 0x7FFE, 0x7FFE, 0x7E7E, 0x3FFC,
+    0x1FF8, 0x03C0, 0x07E0, 0x0FF0, 0x1FF8,
+];
+
+fn suit_mask(s: Suit) -> &'static [u16; 16] {
+    match s {
+        Suit::Hearts => &HEART,
+        Suit::Diamonds => &DIAMOND,
+        Suit::Spades => &SPADE,
+        Suit::Clubs => &CLUB,
+    }
+}
+
+fn ink(s: Suit) -> u32 {
+    if s.is_red() {
+        INK_RED
+    } else {
+        INK_BLACK
+    }
+}
+
+fn rank_str(rank: u8) -> &'static str {
+    match rank {
+        1 => "A",
+        2 => "2",
+        3 => "3",
+        4 => "4",
+        5 => "5",
+        6 => "6",
+        7 => "7",
+        8 => "8",
+        9 => "9",
+        10 => "10",
+        11 => "J",
+        12 => "Q",
+        _ => "K",
+    }
+}
+
+fn col_x(col: i32) -> i32 {
+    MARGIN + col * PITCH
+}
+
+pub fn stock_rect() -> Rect {
+    Rect::new(col_x(0), TOP_Y, CARD_W, CARD_H)
+}
+
+pub fn waste_rect() -> Rect {
+    Rect::new(col_x(1), TOP_Y, CARD_W, CARD_H)
+}
+
+pub fn foundation_rect(i: usize) -> Rect {
+    Rect::new(col_x(3 + i as i32), TOP_Y, CARD_W, CARD_H)
+}
+
+/// Fan offset of card `idx` from the top of tableau pile `pile`.
+fn fan_offset(g: &Game, pile: usize, idx: usize) -> i32 {
+    g.tableau[pile][..idx]
+        .iter()
+        .map(|c| if c.face_up { FAN_UP } else { FAN_DOWN })
+        .sum()
+}
+
+pub fn tableau_card_rect(g: &Game, pile: usize, idx: usize) -> Rect {
+    Rect::new(
+        col_x(pile as i32),
+        TABLEAU_Y + fan_offset(g, pile, idx),
+        CARD_W,
+        CARD_H,
+    )
+}
+
+/// Where the next card dropped on tableau `pile` would land.
+pub fn tableau_drop_rect(g: &Game, pile: usize) -> Rect {
+    let len = g.tableau[pile].len();
+    if len == 0 {
+        Rect::new(col_x(pile as i32), TABLEAU_Y, CARD_W, CARD_H)
+    } else {
+        let mut r = tableau_card_rect(g, pile, len - 1);
+        r.y += FAN_UP;
+        r
+    }
+}
+
+/// What the pointer is over, topmost first.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Hit {
+    Stock,
+    Waste,
+    Foundation(usize),
+    /// (pile, card index)
+    Tableau(usize, usize),
+}
+
+pub fn hit_test(g: &Game, x: i32, y: i32) -> Option<Hit> {
+    if stock_rect().contains(x, y) {
+        return Some(Hit::Stock);
+    }
+    if waste_rect().contains(x, y) && !g.waste.is_empty() {
+        return Some(Hit::Waste);
+    }
+    for i in 0..4 {
+        if foundation_rect(i).contains(x, y) && !g.foundations[i].is_empty() {
+            return Some(Hit::Foundation(i));
+        }
+    }
+    for pile in 0..7 {
+        for idx in (0..g.tableau[pile].len()).rev() {
+            if tableau_card_rect(g, pile, idx).contains(x, y) {
+                return Some(Hit::Tableau(pile, idx));
+            }
+        }
+    }
+    None
+}
+
+fn draw_empty_slot(c: &mut Canvas, r: Rect) {
+    c.fill_rounded_rect(r, 8, gfx::CARD);
+    c.stroke_rounded_rect(r, 8, 1, gfx::STROKE);
+}
+
+pub fn draw_card(c: &mut Canvas, x: i32, y: i32, card: Card) {
+    let r = Rect::new(x, y, CARD_W, CARD_H);
+    if !card.face_up {
+        // Back: dark panel, teal border, diagonal lattice.
+        c.fill_rounded_rect(r, 8, CARD_BACK);
+        c.stroke_rounded_rect(r, 8, 1, with_alpha(gfx::ACC, 140));
+        let weave = with_alpha(gfx::ACC, 36);
+        for py in y + 8..y + CARD_H - 8 {
+            for px in x + 8..x + CARD_W - 8 {
+                let d = px - x + py - y;
+                let a = px - x - (py - y) + CARD_H;
+                if d % 14 < 2 || a % 14 < 2 {
+                    c.put(px, py, weave);
+                }
+            }
+        }
+        return;
+    }
+    // Face: light card with a soft edge, rank + suit in the corner, big pip.
+    c.fill_rounded_rect(r, 8, CARD_FACE);
+    c.stroke_rounded_rect(r, 8, 1, argb(70, 0x0a, 0x0c, 0x10));
+    let color = ink(card.suit);
+    c.draw_text(x + 9, y + 8, rank_str(card.rank), 2, color);
+    c.draw_mask(x + CARD_W - 25, y + 8, suit_mask(card.suit), 16, 16, 1, color);
+    c.draw_mask(
+        x + (CARD_W - 48) / 2,
+        y + (CARD_H - 48) / 2 + 8,
+        suit_mask(card.suit),
+        16,
+        16,
+        3,
+        color,
+    );
+}
+
+/// A card being dragged, drawn last with a soft shadow.
+fn draw_ghost(c: &mut Canvas, x: i32, y: i32, cards: &[Card]) {
+    let total_h = CARD_H + (cards.len() as i32 - 1) * FAN_UP;
+    c.fill_rounded_rect(Rect::new(x + 4, y + 6, CARD_W, total_h), 8, argb(90, 0, 0, 0));
+    for (i, card) in cards.iter().enumerate() {
+        draw_card(c, x, y + i as i32 * FAN_UP, *card);
+    }
+}
+
+/// Cards currently lifted out of the model by an in-progress drag.
+pub struct DragView<'a> {
+    pub from: Loc,
+    pub cards: &'a [Card],
+    /// Ghost top-left.
+    pub x: i32,
+    pub y: i32,
+}
+
+pub fn draw_scene(c: &mut Canvas, g: &Game, drag: Option<&DragView>, status: &str) {
+    // Meridian backdrop: near-black with a faint teal wash falling from the top.
+    c.clear(gfx::BG);
+    c.fill_gradient_v(
+        Rect::new(0, 0, WIN_W, WIN_H / 2),
+        with_alpha(gfx::ACC, 18),
+        with_alpha(gfx::ACC, 0),
+    );
+
+    let hidden = |loc: Loc, n: usize| -> usize {
+        match drag {
+            Some(d) if d.from == loc => n,
+            _ => 0,
+        }
+    };
+
+    // Stock.
+    let sr = stock_rect();
+    if g.stock.is_empty() {
+        draw_empty_slot(c, sr);
+        if !g.waste.is_empty() {
+            c.draw_text(sr.x + (CARD_W - 8) / 2, sr.y + (CARD_H - 8) / 2, "@", 1, gfx::TX3);
+        }
+    } else {
+        draw_card(c, sr.x, sr.y, Card { rank: 1, suit: Suit::Spades, face_up: false });
+    }
+
+    // Waste: top card (minus any dragged one).
+    let wr = waste_rect();
+    let wn = g.waste.len() - hidden(Loc::Waste, 1).min(g.waste.len());
+    if wn == 0 {
+        draw_empty_slot(c, wr);
+    } else {
+        draw_card(c, wr.x, wr.y, g.waste[wn - 1]);
+    }
+
+    // Foundations.
+    for i in 0..4 {
+        let fr = foundation_rect(i);
+        let n = g.foundations[i].len() - hidden(Loc::Foundation(i), 1).min(g.foundations[i].len());
+        if n == 0 {
+            draw_empty_slot(c, fr);
+            c.draw_text(fr.x + (CARD_W - 8) / 2, fr.y + (CARD_H - 8) / 2, "A", 1, gfx::TX3);
+        } else {
+            draw_card(c, fr.x, fr.y, g.foundations[i][n - 1]);
+        }
+    }
+
+    // Tableau.
+    for pile in 0..7 {
+        let n = g.tableau[pile].len() - hidden(Loc::Tableau(pile), drag.map_or(0, |d| d.cards.len()));
+        if n == 0 {
+            draw_empty_slot(c, Rect::new(col_x(pile as i32), TABLEAU_Y, CARD_W, CARD_H));
+        }
+        for idx in 0..n {
+            let r = tableau_card_rect(g, pile, idx);
+            draw_card(c, r.x, r.y, g.tableau[pile][idx]);
+        }
+    }
+
+    // Status line, bottom-left.
+    c.draw_text(MARGIN, WIN_H - 20, status, 1, gfx::TX3);
+
+    if let Some(d) = drag {
+        draw_ghost(c, d.x, d.y, d.cards);
+    }
+}
+
+/// Best drop target for a ghost whose top card covers `ghost`: candidate
+/// piles ordered by overlap area (largest first).
+pub fn drop_candidates(g: &Game, ghost: Rect, count: usize) -> Vec<Loc> {
+    let mut cands: Vec<(i32, Loc)> = Vec::new();
+    if count == 1 {
+        for i in 0..4 {
+            let ov = ghost.overlap(&foundation_rect(i));
+            if ov > 0 {
+                cands.push((ov, Loc::Foundation(i)));
+            }
+        }
+    }
+    for pile in 0..7 {
+        let ov = ghost.overlap(&tableau_drop_rect(g, pile));
+        if ov > 0 {
+            cands.push((ov, Loc::Tableau(pile)));
+        }
+    }
+    cands.sort_by_key(|(ov, _)| -ov);
+    cands.into_iter().map(|(_, l)| l).collect()
+}
+
+pub fn status_text(moves: u32, g: &Game) -> alloc::string::String {
+    format!("moves {}   stock {}   waste {}", moves, g.stock.len(), g.waste.len())
+}
