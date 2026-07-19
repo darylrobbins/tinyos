@@ -610,8 +610,12 @@ impl Terminal {
                     crate::ui::shell::extern_app::register(app.shell, name.to_string());
                     let job = RunningApp {
                         name: name.to_string(),
+                        // Developer mode: `run` is an explicit user action, so
+                        // the app sees the whole filesystem (jail "/"), with
+                        // relative paths against the terminal's cwd.
                         fs_srv: crate::fs::service::FsService::new(
                             app.fs,
+                            String::from("/"),
                             self.cwd.clone(),
                         ),
                         // User-launched via `run`: the user's explicit action is the
