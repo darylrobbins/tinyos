@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod calc;
+pub mod extern_app;
 pub mod clockpill;
 pub mod dock;
 pub mod lockscreen;
@@ -111,6 +112,8 @@ pub struct Shell {
     quick_open: bool,
     locked: bool,
     last_input_us: u64,
+    /// Spawned userspace apps awaiting their first window `OPEN`.
+    pending: Vec<extern_app::PendingApp>,
 }
 
 impl Shell {
@@ -134,6 +137,7 @@ impl Shell {
             quick_open: false,
             locked: false,
             last_input_us: 0,
+            pending: Vec::new(),
         };
         shell.open(Box::new(crate::apps::terminal::TerminalApp::new()));
         shell
@@ -171,7 +175,13 @@ impl Shell {
             .windows
             .iter()
             .any(|w| !w.hidden && w.app.title() == "Timer");
-        if self.interactive(now_us) || countdown || self.drag.is_some() {
+        // A hosted userspace window (or one still waiting to open) needs a
+        // steady frame clock so its surface animates and its channel is
+        // pumped even after the interactive window lapses.
+        let live_extern = !self.pending.is_empty()
+            || extern_app::has_pending()
+            || self.windows.iter().any(|w| !w.hidden && w.app.wants_frames());
+        if self.interactive(now_us) || countdown || self.drag.is_some() || live_extern {
             return now_us + 16_667;
         }
         let monitor = self
@@ -315,6 +325,9 @@ impl Shell {
             if let Some(control) = self.windows[i].control_hit(px, py) {
                 match control {
                     Control::Close => {
+                        // Give a hosted userspace app a chance to exit cleanly
+                        // (the CLOSE_REQ stays queued for it to read).
+                        self.windows[i].app.on_close_request();
                         self.windows.remove(i);
                         self.focus_topmost_visible();
                     }
@@ -503,6 +516,36 @@ impl Shell {
                 .downcast_mut::<crate::apps::clock::ClockApp>()
             {
                 clock.start_timer(secs);
+            }
+        }
+    }
+
+    /// Per-frame servicing of hosted userspace apps: absorb newly spawned
+    /// ones, promote any that sent `OPEN` into windows, and reap windows
+    /// whose app has exited. Called each loop iteration before compose.
+    pub fn pump_externals(&mut self) {
+        self.pending.append(&mut extern_app::take_pending());
+        if !self.pending.is_empty() {
+            for p in core::mem::take(&mut self.pending) {
+                match extern_app::ExternApp::try_open(&p) {
+                    extern_app::OpenResult::Opened(app) => self.open(Box::new(app)),
+                    extern_app::OpenResult::Waiting => self.pending.push(p),
+                    extern_app::OpenResult::Done => {} // exited before opening
+                }
+            }
+        }
+        let mut i = 0;
+        while i < self.windows.len() {
+            let closed = self.windows[i]
+                .app
+                .as_any()
+                .downcast_mut::<extern_app::ExternApp>()
+                .is_some_and(extern_app::ExternApp::pump);
+            if closed {
+                self.windows.remove(i);
+                self.focus_topmost_visible();
+            } else {
+                i += 1;
             }
         }
     }

@@ -408,6 +408,9 @@ impl Terminal {
             match crate::obj::loader::spawn(name.to_string(), &elf, &argv) {
                 Ok(app) => {
                     self.out(format!("run: started {name} (thread {})", app.thread_id), DIM);
+                    // Hand the window channel to the shell: if the app opens a
+                    // window, the shell hosts it. Console output stays here.
+                    crate::ui::shell::extern_app::register(app.shell, name.to_string());
                     self.running = Some(RunningApp {
                         process: app.process,
                         thread_id: app.thread_id,

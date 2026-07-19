@@ -179,6 +179,7 @@ fn ui_thread_main() {
         let now = arch::timer::uptime_us();
         let frame_due = now >= deadline;
         shell.handle(&events);
+        shell.pump_externals();
         shell.stats_tick(events.len() as u32);
 
         // Render only when something can have changed.

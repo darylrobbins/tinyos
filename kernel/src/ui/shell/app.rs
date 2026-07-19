@@ -36,4 +36,12 @@ pub trait App: core::any::Any {
     );
     fn on_char(&mut self, _c: char) {}
     fn on_key(&mut self, _code: u16) {}
+    /// Apps that animate continuously (hosted userspace surfaces) return true
+    /// so the shell keeps composing frames while they are visible.
+    fn wants_frames(&self) -> bool {
+        false
+    }
+    /// The shell is closing this window: a host can ask its process to exit
+    /// gracefully instead of being torn down immediately.
+    fn on_close_request(&mut self) {}
 }
