@@ -47,9 +47,9 @@ impl App for TerminalApp {
     }
 
     fn draw(&mut self, s: &mut Surface, fonts: &mut Fonts, body: Rect, _focused: bool, now: u64) {
-        self.term.pump();
-        self.term.set_cols((body.w / CELL_W).max(10) as usize);
         let rows = (body.h / CELL_H).max(2) as usize;
+        self.term.set_size((body.w / CELL_W).max(10) as usize, rows);
+        self.term.pump();
         self.term.draw(s, fonts, body.x, body.y, rows, now);
     }
 

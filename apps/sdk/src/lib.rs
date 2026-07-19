@@ -26,6 +26,7 @@ pub mod uifont;
 pub mod wait;
 pub mod window;
 
+pub use console::{read_line, ConsoleEvent};
 pub use entry::Env;
 
 /// ABI version stamp placed in the `.tinyos_abi` section; the loader checks

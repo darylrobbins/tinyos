@@ -39,6 +39,8 @@ pub struct Terminal {
     pending_edit: Option<(String, String)>,
     /// A `vi <file>` request for the shell to open a vi window, as (cwd, path).
     pending_vi: Option<(String, String)>,
+    /// Visible rows in cells (from the hosting card), for OP_RESIZE.
+    rows: usize,
 }
 
 struct RunningApp {
@@ -46,7 +48,13 @@ struct RunningApp {
     thread_id: u32,
     console: alloc::sync::Arc<crate::obj::channel::ChannelEnd>,
     /// Partial line accumulated from console WRITE bytes (flushed on '\n').
+    /// While non-empty in LINES mode it doubles as the input prompt, so
+    /// `print!("name? ")` + `read_line()` compose like a real terminal.
     partial: String,
+    /// Console protocol input mode (abi::console::INPUT_MODE_*).
+    input_mode: u32,
+    /// Last (cols, rows) sent as OP_RESIZE; (0, 0) forces the initial send.
+    sent_size: (usize, usize),
 }
 
 impl Terminal {
@@ -59,15 +67,17 @@ impl Terminal {
             running: None,
             pending_edit: None,
             pending_vi: None,
+            rows: 24,
         };
         t.refresh_prompt();
         t.out(format!("tinyOS {VERSION} - type 'help' to get started"), DIM);
         t
     }
 
-    /// Wrap width in cells; the hosting card updates this from its rect.
-    pub fn set_cols(&mut self, cols: usize) {
+    /// Size in cells; the hosting card updates this from its rect.
+    pub fn set_size(&mut self, cols: usize, rows: usize) {
         self.view.cols = cols;
+        self.rows = rows;
     }
 
     /// Take a pending `edit <file>` request, if any (shell drains this).
@@ -99,6 +109,9 @@ impl Terminal {
     }
 
     pub fn on_char(&mut self, c: char) {
+        if self.running.is_some() {
+            return self.app_char(c);
+        }
         if c == '\n' {
             self.execute();
         } else {
@@ -108,6 +121,9 @@ impl Terminal {
     }
 
     pub fn on_key(&mut self, code: u16) {
+        if self.running.is_some() {
+            return self.app_key(code);
+        }
         match code {
             keys::BACKSPACE => self.view.backspace(),
             keys::LEFT => self.view.left(),
@@ -115,6 +131,63 @@ impl Terminal {
             keys::UP => self.history_nav(true),
             keys::DOWN => self.history_nav(false),
             _ => {}
+        }
+    }
+
+    /// Character input while an app runs: raw OP_CHAR in KEYS mode; line
+    /// editing + OP_INPUT_LINE on Enter in LINES mode.
+    fn app_char(&mut self, c: char) {
+        use abi::console::{INPUT_MODE_KEYS, OP_CHAR, OP_INPUT_LINE};
+        let mode = self.running.as_ref().map(|a| a.input_mode).unwrap_or(0);
+        if mode == INPUT_MODE_KEYS {
+            let mut b = OP_CHAR.to_le_bytes().to_vec();
+            b.extend_from_slice(&(c as u32).to_le_bytes());
+            self.send_app(b);
+            return;
+        }
+        if c == '\n' {
+            let text = self.view.active_text();
+            let app = self.running.as_mut().unwrap();
+            // Echo the app's pending prompt + what was typed, like a tty.
+            let echo = format!("{}{}", app.partial, text);
+            app.partial.clear();
+            self.view.freeze_active_as(echo, FG);
+            let mut b = OP_INPUT_LINE.to_le_bytes().to_vec();
+            b.extend_from_slice(text.as_bytes());
+            self.send_app(b);
+        } else {
+            self.view.insert_char(c);
+        }
+    }
+
+    /// Key input while an app runs. The compositor only delivers key-down
+    /// edges here, so KEYS mode reports down=1 for every event.
+    fn app_key(&mut self, code: u16) {
+        use abi::console::{INPUT_MODE_KEYS, OP_KEY};
+        let mode = self.running.as_ref().map(|a| a.input_mode).unwrap_or(0);
+        if mode == INPUT_MODE_KEYS {
+            let mut b = OP_KEY.to_le_bytes().to_vec();
+            b.extend_from_slice(&code.to_le_bytes());
+            b.push(1); // down
+            b.push(0); // mods
+            self.send_app(b);
+            return;
+        }
+        match code {
+            keys::BACKSPACE => self.view.backspace(),
+            keys::LEFT => self.view.left(),
+            keys::RIGHT => self.view.right(),
+            _ => {}
+        }
+    }
+
+    /// Send a console-protocol message to the running app (best effort).
+    fn send_app(&mut self, bytes: Vec<u8>) {
+        if let Some(app) = &self.running {
+            let _ = app.console.send(crate::obj::channel::Message {
+                bytes,
+                handles: Vec::new(),
+            });
         }
     }
 
@@ -449,41 +522,85 @@ impl Terminal {
                         thread_id: app.thread_id,
                         console: app.console,
                         partial: String::new(),
+                        input_mode: abi::console::INPUT_MODE_LINES,
+                        sent_size: (0, 0), // forces the initial OP_RESIZE
                     });
+                    // The shell prompt makes way for the app's own output;
+                    // restored when the app exits.
+                    self.view.set_prompt(Vec::new());
                 }
                 Err(e) => self.out(format!("run: {name}: {}", e.msg()), ERR),
             }
         }
     }
 
-    /// Drain a running app's console output and detect its exit. Called each
-    /// frame from the hosting card.
+    /// Drain a running app's console messages (console protocol v1) and
+    /// detect its exit. Called each frame from the hosting card.
     pub fn pump(&mut self) {
+        use abi::console::*;
+        let (cols, rows) = (self.view.cols, self.rows);
         let Some(app) = &mut self.running else { return };
-        use abi::console::OP_WRITE;
         let mut lines: Vec<(String, u32)> = Vec::new();
+        let mut replies: Vec<Vec<u8>> = Vec::new();
         // Drain all queued console messages.
         while let Ok(msg) = app.console.recv() {
             if msg.bytes.len() < 4 {
                 continue;
             }
             let op = u32::from_le_bytes(msg.bytes[0..4].try_into().unwrap());
-            if op != OP_WRITE {
-                continue;
-            }
-            if let Ok(s) = core::str::from_utf8(&msg.bytes[4..]) {
-                for ch in s.chars() {
-                    if ch == '\n' {
-                        lines.push((core::mem::take(&mut app.partial), FG));
-                    } else {
-                        app.partial.push(ch);
+            match op {
+                OP_WRITE => {
+                    if let Ok(s) = core::str::from_utf8(&msg.bytes[4..]) {
+                        for ch in s.chars() {
+                            if ch == '\n' {
+                                lines.push((core::mem::take(&mut app.partial), FG));
+                            } else {
+                                app.partial.push(ch);
+                            }
+                        }
                     }
                 }
+                OP_HELLO => {
+                    let mut b = OP_HELLO_ACK.to_le_bytes().to_vec();
+                    b.extend_from_slice(&1u32.to_le_bytes()); // protocol v1
+                    b.extend_from_slice(&0u32.to_le_bytes()); // features: none yet
+                    replies.push(b);
+                }
+                OP_SET_INPUT_MODE if msg.bytes.len() >= 8 => {
+                    app.input_mode =
+                        u32::from_le_bytes(msg.bytes[4..8].try_into().unwrap());
+                }
+                _ => {}
             }
         }
+        // Size notification: once after spawn, then on every change.
+        if app.sent_size != (cols, rows) {
+            app.sent_size = (cols, rows);
+            let mut b = OP_RESIZE.to_le_bytes().to_vec();
+            b.extend_from_slice(&(cols as u32).to_le_bytes());
+            b.extend_from_slice(&(rows as u32).to_le_bytes());
+            replies.push(b);
+        }
+        for b in replies {
+            let _ = app.console.send(crate::obj::channel::Message {
+                bytes: b,
+                handles: Vec::new(),
+            });
+        }
         let exited = app.process.exited();
+        // In LINES mode the app's unterminated output doubles as the input
+        // prompt (`print!("name? ")` reads like a tty).
+        let prompt = (app.input_mode == INPUT_MODE_LINES && exited.is_none())
+            .then(|| app.partial.clone());
         for (line, color) in lines {
             self.out(line, color);
+        }
+        if let Some(p) = prompt {
+            self.view.set_prompt(if p.is_empty() {
+                Vec::new()
+            } else {
+                alloc::vec![(p, FG)]
+            });
         }
         if let Some(code) = exited {
             // Flush any trailing partial line, then report.
@@ -492,6 +609,7 @@ impl Terminal {
                 self.out(app.partial, FG);
             }
             self.out(format!("[{}] exited (code {code})", app.thread_id), DIM);
+            self.refresh_prompt();
         }
     }
 
