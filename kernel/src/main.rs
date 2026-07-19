@@ -149,6 +149,9 @@ static UI_STATE: spin::Once<spin::Mutex<Option<UiState>>> = spin::Once::new();
 fn ui_thread_main() {
     let (fb, mut surface, mut fonts, mut input) =
         UI_STATE.get().unwrap().lock().take().expect("ui state");
+    #[cfg(target_arch = "aarch64")]
+    crate::arch::smp::start_secondary_cpus();
+
     let mut shell = ui::shell::Shell::new(fb.width, fb.height);
     kprintln!("tinyos: shell up");
 

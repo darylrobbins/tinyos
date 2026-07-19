@@ -77,8 +77,14 @@ pub fn note_busy(cpu: usize) {
     }
 }
 
-/// Wake other CPUs so they notice new ready threads. Real IPI lands with SMP.
-pub fn kick_others(_from: usize) {}
+/// Poke every other CPU out of wfi so it re-runs its scheduler pass.
+pub fn kick_others(from: usize) {
+    for cpu in 0..super::MAX_CPUS {
+        if cpu != from {
+            super::gic::send_sgi(cpu, 0);
+        }
+    }
+}
 
 /// (wakes per second, idle percent) for one CPU over its last ~1s window.
 pub fn wake_stats(cpu: usize) -> (u32, u32) {
@@ -96,6 +102,7 @@ extern "C" fn irq_entry() {
             break; // spurious / no more pending
         }
         match id {
+            0 => RESCHED[super::cpu_id()].store(true, Ordering::Release), // SGI 0: IPI
             27 => timer::clear_timer(),
             id if (SPI_PCIE_BASE..SPI_PCIE_BASE + 4).contains(&id) => {
                 for slot in &INPUT_ISR_ADDRS {

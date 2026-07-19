@@ -19,17 +19,28 @@ const GICR_WAKER: usize = 0x0014;
 const GICR_SGI: usize = 0x1_0000;
 const GICR_ISENABLER0: usize = GICR_SGI + 0x0100;
 
+const GICR_STRIDE: usize = 0x2_0000;
+
+fn gicr_base(cpu: usize) -> usize {
+    GICR + cpu * GICR_STRIDE
+}
+
 pub fn init() {
     // Distributor: enable group-1 non-secure + affinity routing.
     mmio::w32(GICD + GICD_CTLR, 0b10 | (1 << 4)); // EnableGrp1NS | ARE_NS
+    init_cpu(0);
+}
 
-    // Wake CPU0's redistributor.
-    let waker = mmio::r32(GICR + GICR_WAKER);
-    mmio::w32(GICR + GICR_WAKER, waker & !(1 << 1)); // clear ProcessorSleep
-    while mmio::r32(GICR + GICR_WAKER) & (1 << 2) != 0 {} // ChildrenAsleep
+/// Per-CPU redistributor + CPU-interface init. Must run on the CPU itself
+/// (the ICC_* system registers are banked per CPU).
+pub fn init_cpu(cpu: usize) {
+    let r = gicr_base(cpu);
+    let waker = mmio::r32(r + GICR_WAKER);
+    mmio::w32(r + GICR_WAKER, waker & !(1 << 1)); // clear ProcessorSleep
+    while mmio::r32(r + GICR_WAKER) & (1 << 2) != 0 {} // ChildrenAsleep
 
-    // Enable the virtual-timer PPI (INTID 27) at the redistributor.
-    mmio::w32(GICR + GICR_ISENABLER0, 1 << 27);
+    // Virtual-timer PPI (27) + SGI 0 (our IPI).
+    mmio::w32(r + GICR_ISENABLER0, (1 << 27) | (1 << 0));
 
     unsafe {
         // Enable the sysreg CPU interface, open the priority mask, group 1 on.
@@ -37,6 +48,15 @@ pub fn init() {
         asm!("isb");
         asm!("msr ICC_PMR_EL1, {0:x}", in(reg) 0xFFu64);
         asm!("msr ICC_IGRPEN1_EL1, {0:x}", in(reg) 1u64);
+        asm!("isb");
+    }
+}
+
+/// Send SGI `sgi` to a single CPU (Aff0 = cpu, Aff1..3 = 0 on QEMU virt).
+pub fn send_sgi(cpu: usize, sgi: u32) {
+    let val: u64 = ((sgi as u64) << 24) | (1u64 << (cpu & 0xF));
+    unsafe {
+        asm!("msr ICC_SGI1R_EL1, {0}", in(reg) val);
         asm!("isb");
     }
 }
