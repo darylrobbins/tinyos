@@ -1,8 +1,9 @@
 # tinyOS
 
 A tiny operating system written in Rust for arm64 and x86_64: UEFI boot, a
-software-composited Apple-inspired GUI, and a terminal with built-in
-commands. No interrupts, no processes, no problems.
+software-composited GUI (Meridian design), a terminal with built-in
+commands, and a cooperative multi-core scheduler on 4 CPUs. Tickless,
+interrupt-driven, no processes (yet), no problems.
 
 ![desktop](docs/screenshots/desktop.png)
 
@@ -14,10 +15,17 @@ commands. No interrupts, no processes, no problems.
 - Animated boot splash → desktop with procedural "aurora" wallpaper, frosted
   menu bar and dock (real box-blur backdrop), and a draggable terminal window
   with macOS-style chrome.
-- virtio-input drivers (keyboard + tablet) polled from a cooperative 60 fps
-  event loop; fontdue-rasterized Inter and JetBrains Mono.
+- Interrupt-driven and tickless: GICv3 (arm64) / LAPIC+IOAPIC (x86_64),
+  virtio INTx wakes, one-shot timers. Idle CPUs sit in wfi/hlt at ~0 host
+  CPU; the UI thread blocks on an input wait queue between frames.
+- Cooperative SMP scheduler: 4 cores (PSCI on arm64, UEFI MP Services on
+  x86_64), kernel threads with priority classes and CPU affinity, a global
+  ready queue, SGI/IPI cross-core wakes. `spin 6` pegs cores 1–3 while the
+  desktop stays smooth on core 0.
+- virtio-input drivers (keyboard + tablet); fontdue-rasterized Geist and
+  Geist Mono.
 - Shell built-ins: `help`, `echo`, `clear`, `sysinfo`, `memstat`, `uptime`,
-  `date`, `about` (and one you'll find on your own).
+  `date`, `spin`, `ps`, `kill`, `about` (and one you'll find on your own).
 
 | | |
 |---|---|
@@ -45,9 +53,10 @@ Fit (on by default) to scale.
 
 ```
 kernel/src/
-  main.rs        UEFI entry, boot handoff, event loop
-  arch/aarch64/  exception vectors, generic timer, PL011 serial
-  arch/x86_64/   IDT, TSC timer (PIT-calibrated), COM1 serial, port I/O
+  main.rs        UEFI entry, boot handoff, UI thread
+  sched/         cooperative SMP scheduler: threads, ready queue, wait queues
+  arch/aarch64/  vectors, GICv3, generic timer, PSCI SMP, context switch, PL011
+  arch/x86_64/   IDT, LAPIC/IOAPIC, TSC timer, MP-services SMP, context switch
   mem/           heap over the UEFI memory map
   drivers/       PCI ECAM, virtio-pci transport, virtio-input
   gfx/           software surface, blending, blur, fontdue glyph cache

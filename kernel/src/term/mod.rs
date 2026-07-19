@@ -179,8 +179,8 @@ impl Terminal {
             "date" => self.out(fmt_date(), FG),
             "about" => {
                 self.out("tinyOS - a tiny operating system written in Rust".to_string(), ACCENT);
-                self.out("UEFI boot, software-composited GUI, no interrupts,".to_string(), FG);
-                self.out("no processes, no problems.".to_string(), FG);
+                self.out("UEFI boot, software-composited GUI, 4 cores,".to_string(), FG);
+                self.out("cooperative threads, no processes, no problems.".to_string(), FG);
             }
             "spin" => {
                 let n: usize = rest.trim().parse().unwrap_or(1).clamp(1, 16);

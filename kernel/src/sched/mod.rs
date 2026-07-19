@@ -72,6 +72,7 @@ pub fn current_id() -> u32 {
 pub fn yield_now() {
     let cpu = cpu_id();
     arch::irq::note_busy(cpu);
+    arch::irq::service_irqs();
     let me = current();
     if me.kill_pending.load(Ordering::Acquire) && me.class != Class::Idle {
         exit();

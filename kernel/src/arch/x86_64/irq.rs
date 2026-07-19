@@ -94,6 +94,16 @@ pub fn note_busy(cpu: usize) {
     }
 }
 
+/// Briefly unmask IRQs so pending interrupts get serviced. Called from
+/// yield_now(): a fully busy CPU otherwise never opens an IRQ window
+/// (they are only unmasked inside idle_once) and input goes dead.
+pub fn service_irqs() {
+    unsafe {
+        // Interrupts are delivered during the instruction after sti.
+        asm!("sti", "nop", "cli");
+    }
+}
+
 /// Poke every other CPU out of hlt so it re-runs its scheduler pass.
 pub fn kick_others(from: usize) {
     for cpu in 0..super::MAX_CPUS {

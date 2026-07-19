@@ -77,6 +77,15 @@ pub fn note_busy(cpu: usize) {
     }
 }
 
+/// Briefly unmask IRQs so pending interrupts get serviced. Called from
+/// yield_now(): a fully busy CPU otherwise never opens an IRQ window
+/// (they are only unmasked inside idle_once) and input goes dead.
+pub fn service_irqs() {
+    unsafe {
+        asm!("msr daifclr, #2", "isb", "msr daifset, #2");
+    }
+}
+
 /// Poke every other CPU out of wfi so it re-runs its scheduler pass.
 pub fn kick_others(from: usize) {
     for cpu in 0..super::MAX_CPUS {
