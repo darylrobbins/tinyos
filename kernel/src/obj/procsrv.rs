@@ -85,6 +85,40 @@ fn handle(b: &[u8], can_kill: bool) -> Vec<u8> {
             }
             r
         }
+        Some(OP_SHUTDOWN) | Some(OP_REBOOT) if can_kill => {
+            // Privileged: only user-launched services (can_kill) may power
+            // the machine. Sync the disk first; refuse to power off on a
+            // failed sync (the one case that could lose the device cache).
+            match crate::fs::sync() {
+                Ok(()) => {
+                    if op == Some(OP_REBOOT) {
+                        crate::arch::reboot()
+                    } else {
+                        crate::arch::poweroff()
+                    }
+                }
+                Err(_) => reply1(R_STATUS, PROC_INVALID),
+            }
+        }
+        Some(OP_SHUTDOWN) | Some(OP_REBOOT) => reply1(R_STATUS, PROC_DENIED),
+        Some(OP_SPIN) if can_kill => {
+            let n = b
+                .get(4..8)
+                .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+                .unwrap_or(1)
+                .clamp(1, 16);
+            let affinity = if sched::online_cpus() > 1 { 0b1110 } else { 0b0001 };
+            for _ in 0..n {
+                sched::spawn(
+                    alloc::string::String::from("spin"),
+                    Class::Normal,
+                    affinity,
+                    spin_worker,
+                );
+            }
+            reply1(R_STATUS, PROC_OK)
+        }
+        Some(OP_SPIN) => reply1(R_STATUS, PROC_DENIED),
         Some(OP_KILL) => {
             let Some(id) = b
                 .get(4..8)
@@ -111,4 +145,16 @@ fn reply1(op: u32, st: u32) -> Vec<u8> {
     let mut v = op.to_le_bytes().to_vec();
     v.extend_from_slice(&st.to_le_bytes());
     v
+}
+
+/// Busy work in ~10 ms slices with a yield between, so cooperative
+/// scheduling (and kill) always gets a look-in.
+fn spin_worker() {
+    loop {
+        let t0 = crate::arch::timer::uptime_us();
+        while crate::arch::timer::uptime_us() - t0 < 10_000 {
+            core::hint::spin_loop();
+        }
+        sched::yield_now();
+    }
 }

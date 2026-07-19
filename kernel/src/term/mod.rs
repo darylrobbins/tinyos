@@ -54,6 +54,11 @@ struct RunningApp {
     /// While non-empty in LINES mode it doubles as the input prompt, so
     /// `print!("name? ")` + `read_line()` compose like a real terminal.
     partial: String,
+    /// Color of the current partial line (OP_WRITE = FG, OP_WRITE_STYLED sets it).
+    partial_color: u32,
+    /// Explicit colored prompt (OP_SET_PROMPT); overrides the partial-as-prompt
+    /// fallback. Empty = use the partial. Lets the shell render a Meridian prompt.
+    prompt_spans: Vec<(String, u32)>,
     /// Console protocol input mode (abi::console::INPUT_MODE_*).
     input_mode: u32,
     /// Last (cols, rows) sent as OP_RESIZE; (0, 0) forces the initial send.
@@ -198,9 +203,14 @@ impl Terminal {
             let text = self.view.active_text();
             let app = self.running.as_mut().unwrap();
             // Echo the app's pending prompt + what was typed, like a tty.
-            let echo = format!("{}{}", app.partial, text);
+            let prompt_text: String = if !app.prompt_spans.is_empty() {
+                app.prompt_spans.iter().map(|(t, _)| t.as_str()).collect()
+            } else {
+                app.partial.clone()
+            };
+            let echo = format!("{prompt_text}{text}");
             app.partial.clear();
-            self.view.freeze_active_as(echo, FG);
+            self.view.freeze_active_as(echo, DIM);
             let mut b = OP_INPUT_LINE.to_le_bytes().to_vec();
             b.extend_from_slice(text.as_bytes());
             self.send_app(b);
@@ -638,6 +648,8 @@ impl Terminal {
                         thread_id: app.thread_id,
                         console: app.console,
                         partial: String::new(),
+                        partial_color: FG,
+                        prompt_spans: Vec::new(),
                         input_mode: abi::console::INPUT_MODE_LINES,
                         sent_size: (0, 0), // forces the initial OP_RESIZE
                         surface: None,
@@ -737,6 +749,7 @@ impl Terminal {
         app.proc_srv.pump();
         let mut lines: Vec<(String, u32)> = Vec::new();
         let mut replies: Vec<Vec<u8>> = Vec::new();
+        let mut clear_screen = false;
         // Drain all queued console messages.
         while let Ok(msg) = app.console.recv() {
             if msg.bytes.len() < 4 {
@@ -745,6 +758,7 @@ impl Terminal {
             let op = u32::from_le_bytes(msg.bytes[0..4].try_into().unwrap());
             match op {
                 OP_WRITE => {
+                    app.partial_color = FG;
                     if let Ok(s) = core::str::from_utf8(&msg.bytes[4..]) {
                         for ch in s.chars() {
                             if ch == '\n' {
@@ -754,6 +768,42 @@ impl Terminal {
                             }
                         }
                     }
+                }
+                OP_WRITE_STYLED if msg.bytes.len() >= 8 => {
+                    let fg = u32::from_le_bytes(msg.bytes[4..8].try_into().unwrap());
+                    app.partial_color = fg;
+                    if let Ok(s) = core::str::from_utf8(&msg.bytes[8..]) {
+                        for ch in s.chars() {
+                            if ch == '\n' {
+                                lines.push((core::mem::take(&mut app.partial), fg));
+                            } else {
+                                app.partial.push(ch);
+                            }
+                        }
+                    }
+                }
+                OP_CLEAR => clear_screen = true,
+                OP_SET_PROMPT if msg.bytes.len() >= 8 => {
+                    let b = &msg.bytes;
+                    let count = u32::from_le_bytes(b[4..8].try_into().unwrap()) as usize;
+                    let mut spans = Vec::with_capacity(count);
+                    let mut o = 8usize;
+                    for _ in 0..count {
+                        let (Some(fg), Some(len)) = (
+                            b.get(o..o + 4).map(|c| u32::from_le_bytes(c.try_into().unwrap())),
+                            b.get(o + 4..o + 8).map(|c| u32::from_le_bytes(c.try_into().unwrap()) as usize),
+                        ) else {
+                            break;
+                        };
+                        o += 8;
+                        let Some(txt) = b.get(o..o + len).and_then(|s| core::str::from_utf8(s).ok())
+                        else {
+                            break;
+                        };
+                        spans.push((txt.to_string(), fg));
+                        o += len;
+                    }
+                    app.prompt_spans = spans;
                 }
                 OP_HELLO => {
                     let mut b = OP_HELLO_ACK.to_le_bytes().to_vec();
@@ -875,19 +925,27 @@ impl Terminal {
             });
         }
         let exited = app.process.exited();
-        // In LINES mode the app's unterminated output doubles as the input
-        // prompt (`print!("name? ")` reads like a tty).
-        let prompt = (app.input_mode == INPUT_MODE_LINES && exited.is_none())
-            .then(|| app.partial.clone());
+        // LINES-mode prompt: an explicit OP_SET_PROMPT (colored Meridian
+        // prompt) wins; otherwise unterminated output doubles as the prompt
+        // (`print!("name? ")` reads like a tty).
+        let prompt = (app.input_mode == INPUT_MODE_LINES && exited.is_none()).then(|| {
+            if !app.prompt_spans.is_empty() {
+                app.prompt_spans.clone()
+            } else if app.partial.is_empty() {
+                Vec::new()
+            } else {
+                alloc::vec![(app.partial.clone(), app.partial_color)]
+            }
+        });
+        // app borrow ends above; scrollback edits follow.
+        if clear_screen {
+            self.view.clear();
+        }
         for (line, color) in lines {
             self.out(line, color);
         }
-        if let Some(p) = prompt {
-            self.view.set_prompt(if p.is_empty() {
-                Vec::new()
-            } else {
-                alloc::vec![(p, FG)]
-            });
+        if let Some(spans) = prompt {
+            self.view.set_prompt(spans);
         }
         if let Some(code) = exited {
             // Flatten a live region's last frame, flush any trailing partial

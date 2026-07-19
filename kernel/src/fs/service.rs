@@ -156,6 +156,22 @@ impl FsService {
                     crate::fs::remove("/", p, recursive != 0).map_err(status)
                 })
             }
+            OP_STATFS => match crate::fs::stats() {
+                Ok(st) => {
+                    let mut r = reply1(R_STATFS, FS_OK);
+                    for v in [
+                        st.generation,
+                        st.used_blocks,
+                        st.total_blocks,
+                        st.inodes_used as u64,
+                        st.inodes_total as u64,
+                    ] {
+                        r.extend_from_slice(&v.to_le_bytes());
+                    }
+                    r
+                }
+                Err(e) => reply1(R_STATFS, status(e)),
+            },
             OP_RENAME => {
                 let Some(flen) = le_u32(b, 4).map(|v| v as usize) else {
                     return r_status(FS_INVALID);

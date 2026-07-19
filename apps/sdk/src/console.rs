@@ -73,10 +73,15 @@ impl Console {
         let mut msg = Vec::with_capacity(4 + s.len());
         msg.extend_from_slice(&OP_WRITE.to_le_bytes());
         msg.extend_from_slice(s);
-        // Bounded channel: block on WRITABLE and retry rather than dropping
-        // (the terminal's pump frees space and wakes us).
+        self.send_raw(&msg);
+    }
+
+    /// Send a complete message, blocking on WRITABLE if the bounded channel
+    /// is full (the terminal's pump frees space and wakes us) rather than
+    /// dropping. Peer-closed drops silently.
+    fn send_raw(&self, msg: &[u8]) {
         loop {
-            match self.ch.send(&msg, &[]) {
+            match self.ch.send(msg, &[]) {
                 Ok(()) => return,
                 Err(ST_SHOULD_WAIT) => {
                     let mut it = [crate::wait::WaitItem {
@@ -86,9 +91,39 @@ impl Console {
                     }];
                     let _ = crate::wait::wait_many(&mut it, u64::MAX);
                 }
-                Err(_) => return, // peer gone: drop silently
+                Err(_) => return,
             }
         }
+    }
+
+    /// Write a colored line to scrollback. Flushes any plain-buffered output
+    /// first so ordering is preserved.
+    pub fn write_styled(&mut self, fg: u32, s: &str) {
+        self.flush();
+        let mut msg = OP_WRITE_STYLED.to_le_bytes().to_vec();
+        msg.extend_from_slice(&fg.to_le_bytes());
+        msg.extend_from_slice(s.as_bytes());
+        self.send_raw(&msg);
+    }
+
+    /// Clear the terminal scrollback.
+    pub fn clear(&mut self) {
+        self.flush();
+        self.send_raw(&OP_CLEAR.to_le_bytes());
+    }
+
+    /// Set the colored editable-line prompt (LINES mode). Spans are
+    /// (color, text); rendered as the prompt prefix before user input.
+    pub fn set_prompt(&mut self, spans: &[(u32, &str)]) {
+        self.flush();
+        let mut msg = OP_SET_PROMPT.to_le_bytes().to_vec();
+        msg.extend_from_slice(&(spans.len() as u32).to_le_bytes());
+        for (fg, txt) in spans {
+            msg.extend_from_slice(&fg.to_le_bytes());
+            msg.extend_from_slice(&(txt.len() as u32).to_le_bytes());
+            msg.extend_from_slice(txt.as_bytes());
+        }
+        self.send_raw(&msg);
     }
 
     /// Switch input delivery: `INPUT_MODE_LINES` (default; the emulator

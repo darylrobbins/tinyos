@@ -113,6 +113,32 @@ pub fn ps() -> Result<(Vec<ThreadRow>, Vec<ProcRow>), u32> {
     Ok((threads, procs))
 }
 
+/// Sync + power off. Returns Err on refusal (unprivileged) — on success the
+/// machine goes down and this does not return.
+pub fn shutdown() -> Result<(), u32> {
+    simple(OP_SHUTDOWN, &[])
+}
+
+pub fn reboot() -> Result<(), u32> {
+    simple(OP_REBOOT, &[])
+}
+
+/// Spawn `n` busy threads on cores 1-3 (SMP demo).
+pub fn spin(n: u32) -> Result<(), u32> {
+    simple(OP_SPIN, &n.to_le_bytes())
+}
+
+fn simple(op: u32, payload: &[u8]) -> Result<(), u32> {
+    let mut req = op.to_le_bytes().to_vec();
+    req.extend_from_slice(payload);
+    let m = rpc(&req, R_STATUS)?;
+    match le_u32(&m.bytes, 4) {
+        Some(PROC_OK) => Ok(()),
+        Some(st) => Err(st),
+        None => Err(PROC_INVALID),
+    }
+}
+
 pub fn kill(thread_id: u32) -> Result<(), u32> {
     let mut r = OP_KILL.to_le_bytes().to_vec();
     r.extend_from_slice(&thread_id.to_le_bytes());

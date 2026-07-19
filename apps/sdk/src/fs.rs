@@ -352,6 +352,20 @@ pub fn list(path: &str) -> Result<Vec<(String, u32, u64)>, u32> {
     Ok(out)
 }
 
+/// (generation, blocks_used, blocks_total, inodes_used, inodes_total).
+pub fn statfs() -> Result<(u64, u64, u64, u64, u64), u32> {
+    let c = client().ok_or(FS_IO)?;
+    let m = c.rpc(&req(OP_STATFS), R_STATFS)?;
+    if FsClient::status_of(&m) != FS_OK {
+        return Err(FsClient::status_of(&m));
+    }
+    let b = &m.bytes;
+    let g = |o: usize| -> Result<u64, u32> {
+        b.get(o..o + 8).map(|x| u64::from_le_bytes(x.try_into().unwrap())).ok_or(FS_IO)
+    };
+    Ok((g(8)?, g(16)?, g(24)?, g(32)?, g(40)?))
+}
+
 pub fn mkdir(path: &str) -> Result<(), u32> {
     let c = client().ok_or(FS_IO)?;
     let mut r = req(OP_MKDIR);

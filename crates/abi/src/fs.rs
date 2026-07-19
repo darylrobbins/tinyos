@@ -18,6 +18,7 @@ pub const OP_MKDIR: u32 = 7; // {path:utf8}
 pub const OP_REMOVE: u32 = 8; // {recursive:u32, path:utf8}
 pub const OP_RENAME: u32 = 9; // {fromlen:u32, from:utf8, to:utf8}
 pub const OP_OPEN_DIR: u32 = 10; // {path:utf8} -> R_OPEN_DIR + channel handle
+pub const OP_STATFS: u32 = 11; // -> R_STATFS
 
 // Replies.
 pub const R_STATUS: u32 = 64; // {status:u32}
@@ -29,6 +30,8 @@ pub const R_DIR: u32 = 68; // {status:u32, count:u32, then per entry:
 pub const R_OPEN_DIR: u32 = 69; // {status:u32}; on FS_OK the reply message
                                 // carries one handle: a new FS channel whose
                                 // service is confined to the opened subtree.
+pub const R_STATFS: u32 = 70; // {status:u32, gen:u64, blocks_used:u64,
+                              //  blocks_total:u64, inodes_used:u64, inodes_total:u64}
 
 /// Max live subtree channels (OP_OPEN_DIR) per connection.
 pub const MAX_SUBDIRS: usize = 16;

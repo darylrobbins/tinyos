@@ -7,6 +7,9 @@
 pub const OP_SYSINFO: u32 = 1; // -> R_SYSINFO
 pub const OP_PS: u32 = 2; // -> R_PS
 pub const OP_KILL: u32 = 3; // {thread_id:u32} -> R_STATUS
+pub const OP_SHUTDOWN: u32 = 4; // sync + power off -> R_STATUS (no return on success)
+pub const OP_REBOOT: u32 = 5; // sync + reboot -> R_STATUS
+pub const OP_SPIN: u32 = 6; // {n:u32} spawn n busy threads on cores 1-3 -> R_STATUS
 
 // Replies.
 pub const R_STATUS: u32 = 64; // {status:u32}

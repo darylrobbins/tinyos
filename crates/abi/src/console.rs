@@ -19,6 +19,10 @@ pub const OP_SURFACE_CLOSE: u32 = 7;
 pub const OP_LIVE_OPEN: u32 = 8; // {rows:u32} + cell MemObj
 pub const OP_LIVE_RESIZE: u32 = 9; // {rows:u32} + new cell MemObj
 pub const OP_LIVE_CLOSE: u32 = 10;
+pub const OP_WRITE_STYLED: u32 = 11; // {fg:u32, utf8} scrollback line(s), colored
+pub const OP_CLEAR: u32 = 12; // clear scrollback
+pub const OP_SET_PROMPT: u32 = 13; // {count:u32, per span: fg:u32, len:u32, utf8}
+                              // the LINES-mode editable-line prefix (colored)
 
 // terminal -> app
 pub const OP_INPUT_LINE: u32 = 16; // utf8, no trailing newline
