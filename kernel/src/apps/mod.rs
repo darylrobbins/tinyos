@@ -1,4 +1,3 @@
-pub mod clock;
 pub mod editor;
 pub mod monitor;
 pub mod notes;

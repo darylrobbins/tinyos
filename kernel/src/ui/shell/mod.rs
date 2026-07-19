@@ -8,6 +8,7 @@ pub mod dock;
 pub mod lockscreen;
 pub mod palette;
 pub mod quick;
+pub mod svc;
 pub mod tokens;
 pub mod wallpaper;
 
@@ -118,6 +119,8 @@ pub struct Shell {
     last_input_us: u64,
     /// Spawned userspace apps awaiting their first window `OPEN`.
     pending: Vec<extern_app::PendingApp>,
+    /// Launcher-spawned SDK apps whose services the shell pumps.
+    svc_jobs: Vec<svc::SvcJob>,
 }
 
 impl Shell {
@@ -144,6 +147,7 @@ impl Shell {
             locked: false,
             last_input_us: 0,
             pending: Vec::new(),
+            svc_jobs: Vec::new(),
         };
         shell.open(Box::new(crate::apps::terminal::TerminalApp::new()));
         shell
@@ -498,8 +502,18 @@ impl Shell {
             "terminal" => self.open(Box::new(crate::apps::terminal::TerminalApp::new())),
             "notes" => self.open(Box::new(crate::apps::notes::NotesApp::new())),
             "monitor" => self.open(Box::new(crate::apps::monitor::MonitorApp::new())),
-            "clock" => self.open(Box::new(crate::apps::clock::ClockApp::new())),
+            // SDK apps, spawned from /apps (Phase 4: the launcher speaks
+            // the same protocols as the terminal's `run`).
+            "clock" | "solitaire" | "pixels" => self.launch_app(name, &[]),
             _ => {}
+        }
+    }
+
+    /// Spawn an SDK app from /apps as a shell-hosted windowed app.
+    pub fn launch_app(&mut self, name: &str, argv: &[alloc::string::String]) {
+        match svc::SvcJob::spawn(name, argv) {
+            Ok(j) => self.svc_jobs.push(j),
+            Err(e) => kprintln!("launch {name}: {e}"),
         }
     }
 
@@ -545,16 +559,7 @@ impl Shell {
     }
 
     fn start_timer(&mut self, secs: u64) {
-        self.open_named("clock");
-        if let Some(win) = self.windows.get_mut(self.focus) {
-            if let Some(clock) = win
-                .app
-                .as_any()
-                .downcast_mut::<crate::apps::clock::ClockApp>()
-            {
-                clock.start_timer(secs);
-            }
-        }
+        self.launch_app("clock", &[alloc::format!("{secs}")]);
     }
 
     /// Per-frame servicing of hosted userspace apps: absorb newly spawned
@@ -590,6 +595,7 @@ impl Shell {
     /// Drain `edit <file>` requests queued by any Terminal window and open an
     /// editor window for each. Called once per frame from the main loop.
     pub fn pump_app_requests(&mut self) {
+        self.svc_jobs.retain_mut(|j| !j.pump());
         let mut edits = alloc::vec::Vec::new();
         for win in &mut self.windows {
             if let Some(t) = win

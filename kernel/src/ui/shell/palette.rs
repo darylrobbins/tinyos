@@ -130,12 +130,16 @@ impl Palette {
             return Action::None;
         }
         match cmd.as_str() {
-            "terminal" | "notes" | "monitor" | "clock" => Action::Open(match cmd.as_str() {
-                "terminal" => "terminal",
-                "notes" => "notes",
-                "monitor" => "monitor",
-                _ => "clock",
-            }),
+            "terminal" | "notes" | "monitor" | "clock" | "solitaire" | "pixels" => {
+                Action::Open(match cmd.as_str() {
+                    "terminal" => "terminal",
+                    "notes" => "notes",
+                    "monitor" => "monitor",
+                    "solitaire" => "solitaire",
+                    "pixels" => "pixels",
+                    _ => "clock",
+                })
+            }
             "close" => Action::CloseFocused,
             "lock" => Action::Lock,
             "help" => Action::Help,
