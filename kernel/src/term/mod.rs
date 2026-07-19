@@ -170,6 +170,7 @@ impl Terminal {
     }
 
     fn out(&mut self, s: String, color: u32) {
+        crate::smoke::mirror(&s);
         self.view.append_frozen(s, color);
     }
 

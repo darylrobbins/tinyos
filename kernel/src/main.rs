@@ -14,6 +14,7 @@ mod gfx;
 mod mem;
 mod obj;
 mod sched;
+mod smoke;
 mod term;
 mod ui;
 
@@ -117,6 +118,9 @@ fn kmain(mut fb: FbInfo, memory_map: MemoryMapOwned) -> ! {
     }
 
     // Upgrade the display: re-point ramfb at our own, larger framebuffer.
+    // Gated serial mirror of shell/app output for the headless smoke harness.
+    smoke::init();
+
     // (edk2's GOP tops out at 1024x768; ramfb itself has no such limit.)
     let (rw, rh) = drivers::fwcfg::read_str("opt/tinyos/res")
         .and_then(|s| {

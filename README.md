@@ -67,6 +67,13 @@ image in place (user files survive). `make test` runs the host-side suites
 (tinyfs crash consistency, textui, vicore, solitaire) and checks both
 kernel targets compile.
 
+`make smoke` boots the OS headless and drives the real userspace shell over
+QEMU's QMP channel — typing `help`, `ls`, `ps`, launching a full-screen app
+and killing it with Ctrl+C, then `shutdown` — asserting on command output
+mirrored to serial. It catches the whole class of multi-core / IPC / console
+back-pressure bugs that only surface at runtime and are invisible to the host
+suites. See `tools/smoke/`.
+
 The desktop runs at 1440×900 by default (the kernel re-points QEMU's ramfb
 at its own framebuffer via fw_cfg, past edk2's 1024×768 GOP ceiling). Pick
 any size with `make run RES=1920x1200`.

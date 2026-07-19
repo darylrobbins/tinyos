@@ -52,7 +52,12 @@ QEMU_ARGS    = $(MACHINE) -m 512M $(ACCEL) $(FLASH) \
 
 run: QEMU_ARGS += $(DISPLAY_ARG)
 
-.PHONY: build apps run gdb clean cleandisk firmware mkfs test sync-apps
+# Headless smoke test: boot, drive the userspace shell over QMP, assert on
+# command output mirrored to serial (opt/tinyos/smoke turns the mirror on).
+# aarch64 only; catches runtime bugs host `make test` cannot (see tools/smoke).
+SMOKE_ARGS = -display none -fw_cfg name=opt/tinyos/smoke,string=1
+
+.PHONY: build apps run gdb clean cleandisk firmware mkfs test sync-apps smoke
 
 # Never `cargo build --target ...` at the workspace root: mkfs-tinyfs is a
 # host-target std binary and would fail to cross-compile for UEFI.
@@ -108,6 +113,10 @@ run: build firmware $(DISK)
 
 gdb: build firmware $(DISK)
 	$(QEMU) $(QEMU_ARGS) -s -S
+
+# Rebuild apps into the disk first so the shell/apps under test are current.
+smoke: build firmware sync-apps
+	python3 tools/smoke/smoke.py -- $(QEMU) $(QEMU_ARGS) $(SMOKE_ARGS)
 
 # Keeps disk.img; use cleandisk to reset the filesystem.
 clean:

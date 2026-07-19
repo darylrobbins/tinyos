@@ -92,8 +92,10 @@ fn handle(b: &[u8], can_kill: bool) -> Vec<u8> {
             match crate::fs::sync() {
                 Ok(()) => {
                     if op == Some(OP_REBOOT) {
+                        kprintln!("tinyos: proc: filesystem synced, rebooting");
                         crate::arch::reboot()
                     } else {
+                        kprintln!("tinyos: proc: filesystem synced, going down");
                         crate::arch::poweroff()
                     }
                 }
