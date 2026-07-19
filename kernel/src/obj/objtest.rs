@@ -117,6 +117,77 @@ pub fn run() -> Vec<String> {
         jp("/", "/home", "../x") == Ok(String::from("/x")),
     );
 
+    // Subtree capabilities (OP_OPEN_DIR): confinement + revocation, driven
+    // over a real service. Needs a mounted filesystem; skipped without one.
+    if crate::fs::resolve_dir("/", "/").is_ok() {
+        use abi::fs::{FS_NOT_FOUND, FS_OK, OP_OPEN_DIR, OP_STAT, R_OPEN_DIR, R_STAT};
+        let _ = crate::fs::mkdir("/", "/data");
+        let _ = crate::fs::mkdir("/", "/data/jt");
+        let _ = crate::fs::mkdir("/", "/data/jt/sub");
+        let _ = crate::fs::write("/", "/data/jt/secret", b"s", false);
+
+        let rpc = |svc: &mut crate::fs::service::FsService,
+                   end: &alloc::sync::Arc<channel::ChannelEnd>,
+                   op: u32,
+                   payload: &[u8]| {
+            let mut b = op.to_le_bytes().to_vec();
+            b.extend_from_slice(payload);
+            let _ = end.send(Message { bytes: b, handles: Vec::new() });
+            svc.pump();
+            end.recv()
+        };
+
+        let (app, kern) = channel::create();
+        let mut svc = crate::fs::service::FsService::new(
+            kern,
+            String::from("/data/jt"),
+            String::from("/"),
+        );
+        // Mint a /sub capability; the reply carries the child channel.
+        let child = match rpc(&mut svc, &app, OP_OPEN_DIR, b"/sub") {
+            Ok(m)
+                if m.bytes.get(0..8)
+                    == Some(&[R_OPEN_DIR.to_le_bytes(), FS_OK.to_le_bytes()].concat()[..]) =>
+            {
+                m.handles.into_iter().next().and_then(|h| match h.object {
+                    Object::Channel(c) => Some(c),
+                    _ => None,
+                })
+            }
+            _ => None,
+        };
+        check("open_dir mints child channel", child.is_some());
+        if let Some(child) = child {
+            // The child is confined to /sub: the parent's file is invisible
+            // even via .. (which clamps at the child's jail root).
+            let stat = |svc: &mut crate::fs::service::FsService,
+                        end: &alloc::sync::Arc<channel::ChannelEnd>,
+                        p: &[u8]| {
+                match rpc(svc, end, OP_STAT, p) {
+                    Ok(m) if m.bytes.get(0..4) == Some(&R_STAT.to_le_bytes()[..]) => m
+                        .bytes
+                        .get(4..8)
+                        .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+                        .unwrap_or(u32::MAX),
+                    _ => u32::MAX,
+                }
+            };
+            check(
+                "open_dir child is confined",
+                stat(&mut svc, &child, b"/secret") == FS_NOT_FOUND
+                    && stat(&mut svc, &child, b"../secret") == FS_NOT_FOUND
+                    && stat(&mut svc, &app, b"/secret") == FS_OK,
+            );
+            // Dropping the parent service revokes the child capability.
+            drop(svc);
+            check(
+                "open_dir revoked with parent",
+                child.signals() & SIG_PEER_CLOSED != 0,
+            );
+        }
+        let _ = crate::fs::remove("/", "/data/jt", true);
+    }
+
     out
 }
 
