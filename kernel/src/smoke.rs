@@ -31,9 +31,18 @@ pub fn enabled() -> bool {
 }
 
 /// Mirror one rendered scrollback line to serial. Cheap no-op when disabled.
+///
+/// A scrollback line is normally newline-free (the console pump splits app
+/// output on `\n` before it reaches here), but guard anyway: an embedded
+/// newline would split into extra serial lines, letting app output forge a
+/// fake `[out]`/`tinyos:` line and confuse the harness. Neutralize them.
 #[inline]
 pub fn mirror(line: &str) {
     if enabled() {
-        kprintln!("[out] {line}");
+        if line.contains('\n') {
+            kprintln!("[out] {}", line.replace('\n', "\u{23ce}"));
+        } else {
+            kprintln!("[out] {line}");
+        }
     }
 }
