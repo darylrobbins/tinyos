@@ -303,6 +303,7 @@ impl Terminal {
                     ("touch <file>", "create an empty file"),
                     ("mkdir <dir>", "create a directory"),
                     ("rm [-r] <path>", "remove a file or directory"),
+                    ("cp <from> <to>", "copy a file (cp app /apps/name installs it)"),
                     ("mv <from> <to>", "move or rename"),
                     ("cd [dir]", "change directory"),
                     ("pwd", "print working directory"),
@@ -474,6 +475,17 @@ impl Terminal {
                     self.out(format!("rm: {e}"), ERR);
                 }
             }
+            "cp" => match rest.trim().split_once(' ') {
+                Some((from, to)) => match crate::fs::read(&self.cwd, from.trim()) {
+                    Ok(data) => {
+                        if let Err(e) = crate::fs::write(&self.cwd, to.trim(), &data, false) {
+                            self.out(format!("cp: {e}"), ERR);
+                        }
+                    }
+                    Err(e) => self.out(format!("cp: {from}: {e}"), ERR),
+                },
+                None => self.out("usage: cp <from> <to>".to_string(), ERR),
+            },
             "mv" => match rest.trim().split_once(' ') {
                 Some((from, to)) => {
                     if let Err(e) = crate::fs::rename(&self.cwd, from.trim(), to.trim()) {

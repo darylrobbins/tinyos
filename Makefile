@@ -52,7 +52,7 @@ QEMU_ARGS    = $(MACHINE) -m 512M $(ACCEL) $(FLASH) \
 
 run: QEMU_ARGS += $(DISPLAY_ARG)
 
-.PHONY: build apps run gdb clean cleandisk firmware mkfs test
+.PHONY: build apps run gdb clean cleandisk firmware mkfs test sync-apps
 
 # Never `cargo build --target ...` at the workspace root: mkfs-tinyfs is a
 # host-target std binary and would fail to cross-compile for UEFI.
@@ -78,9 +78,13 @@ mkfs:
 
 # Created only if missing so its contents persist across runs (`make cleandisk`
 # resets it, re-baking the apps currently staged in $(STAGE)). After rebuilding
-# an app, `make cleandisk` to refresh /apps in the image.
+# an app, `make sync-apps` refreshes /apps in place — user files survive.
 $(DISK): | mkfs apps
 	$(MKFS) create $(DISK) --size $(DISK_SIZE) $(if $(wildcard $(STAGE)/*),--populate $(STAGE),)
+
+# Update /apps inside an existing disk.img without recreating it (VM off).
+sync-apps: mkfs apps
+	$(foreach a,$(APP_BINS),$(MKFS) put $(DISK) $(STAGE)/apps/$(a) /apps/$(a);)
 
 test:
 	cargo test -p tinyfs

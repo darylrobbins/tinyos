@@ -1,6 +1,7 @@
 //! Host-side tinyfs tool: create/populate disk images, inspect and check them.
 //!
 //!   mkfs-tinyfs create <img> [--size 64M] [--populate <dir>]
+//!   mkfs-tinyfs put   <img> <host-file> <fs-path>
 //!   mkfs-tinyfs ls    <img> [path]
 //!   mkfs-tinyfs cat   <img> <path>
 //!   mkfs-tinyfs check <img>
@@ -66,6 +67,7 @@ fn parse_size(s: &str) -> Option<u64> {
 fn usage() -> ! {
     eprintln!(
         "usage: mkfs-tinyfs create <img> [--size 64M] [--populate <dir>]\n\
+         \x20      mkfs-tinyfs put   <img> <host-file> <fs-path>\n\
          \x20      mkfs-tinyfs ls    <img> [path]\n\
          \x20      mkfs-tinyfs cat   <img> <path>\n\
          \x20      mkfs-tinyfs check <img>"
@@ -153,6 +155,30 @@ fn main() {
                 st.used_blocks,
                 st.generation
             );
+        }
+        Some("put") => {
+            // Insert/update one file in an existing image (VM must be off).
+            // Unlike re-creating the image, this preserves user files.
+            let (img, host, path) = match (args.get(1), args.get(2), args.get(3)) {
+                (Some(i), Some(h), Some(p)) => (i, h, p),
+                _ => usage(),
+            };
+            let data =
+                std::fs::read(host).unwrap_or_else(|e| fail(&format!("read {host}: {e}")));
+            let mut fs = open_fs(img, true);
+            // Create missing parent directories along the way.
+            let parts: Vec<&str> = path.trim_matches('/').split('/').collect();
+            let mut dir = String::new();
+            for part in &parts[..parts.len().saturating_sub(1)] {
+                dir = format!("{dir}/{part}");
+                match fs.mkdir("/", &dir) {
+                    Ok(()) | Err(FsError::Exists) => {}
+                    Err(e) => fail(&format!("mkdir {dir}: {e}")),
+                }
+            }
+            fs.write("/", path, &data, false)
+                .unwrap_or_else(|e| fail(&format!("write {path}: {e}")));
+            println!("{img}: put {} ({} bytes)", path, data.len());
         }
         Some("ls") => {
             let img = args.get(1).unwrap_or_else(|| usage());

@@ -60,10 +60,11 @@ fn main(env: Env) -> i32 {
             None => return 1,
         }
     };
+    let (mut cols, mut rows) = (cols, rows);
     let Ok(mut surf) = con.open_surface(cols, rows) else { return 1 };
     let mut buf = CellBuffer::new(cols as usize, rows as usize);
     let mut top = 0usize;
-    let page = rows.saturating_sub(2) as usize;
+    let mut page = rows.saturating_sub(2) as usize;
     let max_top = lines.len().saturating_sub(1);
 
     loop {
@@ -80,7 +81,14 @@ fn main(env: Env) -> i32 {
                 top = (top + 1).min(max_top);
             }
             Some(ConsoleEvent::Resize { cols: c, rows: r }) if (c, r) != (cols, rows) => {
-                // v1: fixed-size surface; re-run view after resizing.
+                // Open-replaces-open; the old surface unmaps on drop.
+                (cols, rows) = (c, r);
+                surf = match con.open_surface(cols, rows) {
+                    Ok(s) => s,
+                    Err(_) => break,
+                };
+                buf.resize(cols as usize, rows as usize);
+                page = rows.saturating_sub(2) as usize;
             }
             Some(_) => {}
         }
