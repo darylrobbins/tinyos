@@ -1,9 +1,10 @@
 # tinyOS
 
 A tiny operating system written in Rust for arm64 and x86_64: UEFI boot, a
-software-composited GUI (Meridian design), a terminal with built-in
-commands, and a cooperative multi-core scheduler on 4 CPUs. Tickless,
-interrupt-driven, no processes (yet), no problems.
+software-composited GUI (Meridian design), real userspace processes at EL0
+behind a capability-based syscall ABI, a copy-on-write filesystem, and a
+terminal that hosts full-screen text apps — no POSIX, no escape sequences,
+no problems.
 
 ![desktop](docs/screenshots/desktop.png)
 
@@ -13,27 +14,36 @@ interrupt-driven, no processes (yet), no problems.
   Apple Silicon, the fast dev loop) or x86_64 `q35` (TCG-emulated) — grabs
   the GOP framebuffer, exits boot services, and runs freestanding.
 - Animated boot splash → desktop with procedural "aurora" wallpaper, frosted
-  menu bar and dock (real box-blur backdrop), and a draggable terminal window
-  with macOS-style chrome.
-- Interrupt-driven and tickless: GICv3 (arm64) / LAPIC+IOAPIC (x86_64),
-  virtio INTx wakes, one-shot timers. Idle CPUs sit in wfi/hlt at ~0 host
-  CPU; the UI thread blocks on an input wait queue between frames.
-- Cooperative SMP scheduler: 4 cores (PSCI on arm64, UEFI MP Services on
-  x86_64), kernel threads with priority classes and CPU affinity, a global
-  ready queue, SGI/IPI cross-core wakes. `spin 6` pegs cores 1–3 while the
-  desktop stays smooth on core 0.
-- virtio-input drivers (keyboard + tablet); fontdue-rasterized Geist and
-  Geist Mono.
+  Meridian shell (dock, Ctrl+K command palette), draggable windows with
+  macOS-style chrome.
+- **Real userspace (arm64):** apps are static ELF binaries running at EL0 in
+  per-process TTBR1 address spaces (ASID-tagged, flush-free switches),
+  talking to the kernel through a ~16-syscall capability ABI — handles +
+  rights, channels carrying bytes + handles, shared-memory objects, one
+  unified wait. Timer-preempted, memory-quota'd (64 MiB/process), spawnable
+  from userspace with explicit capability grants.
+- **Everything else is a protocol over channels**, so the kernel stays
+  small: the console protocol (line stdin, full-screen cell surfaces for
+  vim-class TUIs, an Ink-style bottom live region), the window protocol
+  (zero-copy BGRA surfaces), the file protocol, and a narrow process-control
+  protocol. All defined once in `crates/abi`, shared by kernel and SDK.
+- **The apps live in userspace**: vi (a real modal editor on the host-tested
+  `vicore` engine), a windowed text editor/notes, solitaire, a `view` pager,
+  `top`, clock, and demo TUIs — launched from the terminal (`run <name>`,
+  `&` for background jobs) or the palette/dock.
 - **tinyfs**, a native copy-on-write filesystem on virtio-blk: shadow-paging
-  checkpoints (crash-consistent by construction — no journal, no fsck, no
-  GC), files persist across reboots in `disk.img`, same image mounts on both
-  arches. Comes with a host-side `mkfs-tinyfs` tool and `cargo test -p tinyfs`
-  unit + crash-consistency tests.
-- Shell built-ins: `help`, `echo`, `clear`, `sysinfo`, `memstat`, `uptime`,
-  `date`, `spin`, `ps`, `kill`, `about` (and one you'll find on your own),
-  plus files: `ls`, `cat`, `write`, `append`, `mkdir`, `rm`, `mv`, `cd`,
-  `pwd`, `fsinfo` — and `shutdown` / `reboot` (sync the disk, then PSCI
-  SYSTEM_OFF/RESET on arm64, ACPI S5 / reset port on x86_64).
+  checkpoints (crash-consistent by construction — the test suite replays
+  every write-log cut point), files persist across reboots in `disk.img`.
+  Host-side `mkfs-tinyfs` tool; `make sync-apps` updates `/apps` in place
+  without touching user files.
+- Interrupt-driven and tickless: GICv3 (arm64) / LAPIC+IOAPIC (x86_64),
+  one-shot timers, idle CPUs in wfi/hlt at ~0 host CPU. Cooperative SMP
+  scheduler on 4 cores, a bitmap frame allocator over the UEFI memory map,
+  canary-checked kernel stacks.
+- Shell built-ins: files (`ls cat write append touch mkdir rm mv cp cd pwd
+  fsinfo`), processes (`ps kill jobs run`), editors (`vi`, `edit` — both
+  userspace), system (`sysinfo memstat uptime date spin about`), and
+  `shutdown` / `reboot` (sync the disk, then power off).
 
 | | |
 |---|---|
@@ -44,7 +54,7 @@ interrupt-driven, no processes (yet), no problems.
 ```sh
 brew install qemu     # once
 make run              # arm64, near-native under HVF
-make run ARCH=x86_64  # x86_64, emulated (slower boot, same OS)
+make run ARCH=x86_64  # x86_64, emulated (no userspace yet on this arch)
 ```
 
 `make run` builds the kernel for `aarch64-unknown-uefi`, stages it as
@@ -52,32 +62,37 @@ make run ARCH=x86_64  # x86_64, emulated (slower boot, same OS)
 Hypervisor.framework. Serial output lands on stdout. If HVF gives you
 trouble: `make run ACCEL="-accel tcg -cpu cortex-a72"`.
 
+After changing an app: `make sync-apps` refreshes `/apps` inside the disk
+image in place (user files survive). `make test` runs the host-side suites
+(tinyfs crash consistency, textui, vicore, solitaire) and checks both
+kernel targets compile.
+
 The desktop runs at 1440×900 by default (the kernel re-points QEMU's ramfb
 at its own framebuffer via fw_cfg, past edk2's 1024×768 GOP ceiling). Pick
-any size with `make run RES=1920x1200`, and use the window's View → Zoom to
-Fit (on by default) to scale.
+any size with `make run RES=1920x1200`.
 
 ## Layout
 
 ```
+crates/
+  abi/           the ABI, defined once: syscalls, protocols, design tokens
+  textui/        cell-grid TUI toolkit (host-tested)
+  tinyfs/        the filesystem: no_std core, host-testable
+  vicore/        the vi engine: pure, host-tested
 kernel/src/
   main.rs        UEFI entry, boot handoff, UI thread
-  sched/         cooperative SMP scheduler: threads, ready queue, wait queues
-  arch/aarch64/  vectors, GICv3, generic timer, PSCI SMP, context switch, PL011
-  arch/x86_64/   IDT, LAPIC/IOAPIC, TSC timer, MP-services SMP, context switch
-  mem/           heap over the UEFI memory map
-  drivers/       PCI ECAM, virtio-pci transport, virtio-input, virtio-blk
-  fs/            mounted-filesystem singleton + shell-facing wrappers
-  gfx/           software surface, blending, blur, fontdue glyph cache
-  ui/            splash, wallpaper, desktop shell, cursor
-  term/          terminal widget + built-in shell
-crates/abi/      shared ABI: syscall numbers, protocols, design tokens
-crates/tinyfs/   the filesystem itself: no_std core, host-testable
-crates/vicore/   vi editor core: no_std, host-testable
-tools/mkfs-tinyfs/  host tool: create/populate/inspect/check disk images
+  sched/         cooperative SMP scheduler: threads, ready/wait queues
+  arch/          aarch64 (EL0 userspace, GICv3, PSCI) + x86_64 backends
+  mem/           heap + bitmap frame allocator over the UEFI memory map
+  obj/           capability layer: handles, channels, memobjs, processes,
+                 syscalls, ELF loader, process-control service
+  drivers/       PCI ECAM, virtio-pci, virtio-input, virtio-blk
+  fs/            mounted-fs singleton + the file-protocol service
+  gfx/ ui/ term/ compositor, Meridian shell, terminal emulator
+apps/            the userspace workspace: sdk/ (tinyos-app runtime) + apps
+tools/mkfs-tinyfs/  host tool: create/populate/update/inspect disk images
+docs/superpowers/   design specs + roadmap (start: 2026-07-19-roadmap.md)
 ```
-
-Design doc: `docs/superpowers/specs/2026-07-17-tinyos-design.md`.
 
 Fonts: [Geist and Geist Mono](https://vercel.com/font), OFL (license in
 `assets/`). Inspired by [Philipp Oppermann's blog_os](https://os.phil-opp.com).

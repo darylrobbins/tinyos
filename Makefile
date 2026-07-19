@@ -90,6 +90,10 @@ sync-apps: mkfs apps | $(DISK)
 test:
 	cargo test -p tinyfs
 	cargo test -p textui
+	cargo test -p vicore
+	# Both kernel targets must keep compiling (stub drift breaks x86_64).
+	cargo check -p kernel --target aarch64-unknown-uefi
+	cargo check -p kernel --target x86_64-unknown-uefi
 	cd apps && cargo test -p solitaire --lib --no-default-features --target $$(rustc -vV | sed -n 's/^host: //p')
 
 firmware:
