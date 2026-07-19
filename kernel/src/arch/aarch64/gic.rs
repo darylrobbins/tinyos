@@ -17,6 +17,7 @@ const GICD_ICFGR: usize = 0x0C00;
 // Redistributor (RD_base + SGI_base frames).
 const GICR_WAKER: usize = 0x0014;
 const GICR_SGI: usize = 0x1_0000;
+const GICR_IGROUPR0: usize = GICR_SGI + 0x0080;
 const GICR_ISENABLER0: usize = GICR_SGI + 0x0100;
 
 const GICR_STRIDE: usize = 0x2_0000;
@@ -38,6 +39,11 @@ pub fn init_cpu(cpu: usize) {
     let waker = mmio::r32(r + GICR_WAKER);
     mmio::w32(r + GICR_WAKER, waker & !(1 << 1)); // clear ProcessorSleep
     while mmio::r32(r + GICR_WAKER) & (1 << 2) != 0 {} // ChildrenAsleep
+
+    // All SGIs/PPIs to Group 1 (IRQ). Firmware only does this for the CPU
+    // it booted on; AP redistributors reset to Group 0 (= FIQ, which we
+    // never unmask, and Group-1 SGI sends to a Group-0 SGI are dropped).
+    mmio::w32(r + GICR_IGROUPR0, 0xFFFF_FFFF);
 
     // Virtual-timer PPI (27) + SGI 0 (our IPI).
     mmio::w32(r + GICR_ISENABLER0, (1 << 27) | (1 << 0));

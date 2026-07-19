@@ -7,6 +7,8 @@ use alloc::vec::Vec;
 
 use crate::arch::timer;
 use crate::drivers::input::keys;
+use crate::sched;
+use crate::sched::thread::Class;
 use crate::gfx::font::Fonts;
 use crate::gfx::surface::{argb, rgb, Surface};
 use crate::{mem, VERSION};
@@ -142,6 +144,9 @@ impl Terminal {
                     ("memstat", "heap usage"),
                     ("uptime", "time since boot"),
                     ("date", "current date and time"),
+                    ("spin [n]", "spawn n busy threads on cores 1-3"),
+                    ("ps", "list threads"),
+                    ("kill <id>", "stop a thread"),
                     ("about", "about tinyOS"),
                 ] {
                     self.out(format!("  {c:<14} {d}"), FG);
@@ -177,6 +182,40 @@ impl Terminal {
                 self.out("UEFI boot, software-composited GUI, no interrupts,".to_string(), FG);
                 self.out("no processes, no problems.".to_string(), FG);
             }
+            "spin" => {
+                let n: usize = rest.trim().parse().unwrap_or(1).clamp(1, 16);
+                // Cores 1-3 take the load; core 0 keeps the desktop smooth.
+                // Single-core machines share core 0 cooperatively.
+                let affinity = if sched::online_cpus() > 1 { 0b1110 } else { 0b0001 };
+                for _ in 0..n {
+                    let id = sched::spawn("spin".to_string(), Class::Normal, affinity, spin_worker);
+                    self.out(format!("spawned spin thread {id}"), FG);
+                }
+            }
+            "ps" => {
+                self.out(
+                    format!("{:>4}  {:<8} {:<8} {:>3}  CLASS", "ID", "NAME", "STATE", "CPU"),
+                    DIM,
+                );
+                for t in sched::snapshot() {
+                    let state = format!("{:?}", t.state);
+                    self.out(
+                        format!(
+                            "{:>4}  {:<8} {:<8} {:>3}  {:?}",
+                            t.id, t.name, state, t.cpu, t.class
+                        ),
+                        FG,
+                    );
+                }
+            }
+            "kill" => match rest.trim().parse::<u32>() {
+                Ok(id) if id == sched::ui_thread_id() => {
+                    self.out("kill: refusing to kill the ui thread".to_string(), ERR)
+                }
+                Ok(id) if sched::kill(id) => self.out(format!("kill: signalled {id}"), FG),
+                Ok(id) => self.out(format!("kill: no such thread {id}"), ERR),
+                Err(_) => self.out("usage: kill <id>".to_string(), ERR),
+            },
             "sudo" => self.out(
                 "daryl is not in the sudoers file. This incident will be reported.".to_string(),
                 ERR,
@@ -219,6 +258,18 @@ impl Terminal {
             let cx = px + self.cursor as i32 * CELL_W;
             surface.fill_rect(cx, y + 1, CELL_W, CELL_H - 2, argb(210, 228, 228, 236));
         }
+    }
+}
+
+/// Busy work in ~10 ms slices with a yield between slices, so cooperative
+/// scheduling (and kill) always gets a look-in.
+fn spin_worker() {
+    loop {
+        let t0 = timer::uptime_us();
+        while timer::uptime_us() - t0 < 10_000 {
+            core::hint::spin_loop();
+        }
+        sched::yield_now(); // exits here when kill_pending is set
     }
 }
 
