@@ -8,7 +8,9 @@ use crate::syscall::*;
 #[global_allocator]
 static HEAP: LockedHeap = LockedHeap::empty();
 
-const HEAP_SIZE: u64 = 1024 * 1024; // 1 MiB is plenty for demo apps
+// Sized for GUI apps that keep a window-sized back buffer (a 920x640 BGRA
+// frame alone is ~2.3 MiB) plus game state.
+const HEAP_SIZE: u64 = 8 * 1024 * 1024;
 
 pub fn init() {
     let h = match syscall1(SYS_MEMOBJ_CREATE, HEAP_SIZE).ok() {

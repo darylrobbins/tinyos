@@ -1,0 +1,20 @@
+[package]
+name = "solitaire"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tinyos-app = { path = "../sdk", optional = true }
+
+[features]
+default = ["app"]
+app = ["dep:tinyos-app"]
+
+[lib]
+name = "solitaire"
+path = "src/lib.rs"
+
+[[bin]]
+name = "solitaire"
+path = "src/main.rs"
+required-features = ["app"]

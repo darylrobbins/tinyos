@@ -64,7 +64,7 @@ build: apps
 # Third-party userspace apps: a separate workspace (aarch64-unknown-none),
 # staged under $(STAGE)/apps and baked into the tinyfs image when the disk is
 # created (see $(DISK) below). aarch64 only for now (userspace is aarch64-first).
-APP_BINS := hello pixels
+APP_BINS := hello pixels solitaire
 STAGE    := $(BUILD)/stage
 apps:
 ifeq ($(ARCH),aarch64)
@@ -84,6 +84,7 @@ $(DISK): | mkfs apps
 
 test:
 	cargo test -p tinyfs
+	cd apps && cargo test -p solitaire --lib --no-default-features --target $$(rustc -vV | sed -n 's/^host: //p')
 
 firmware:
 	mkdir -p $(BUILD)

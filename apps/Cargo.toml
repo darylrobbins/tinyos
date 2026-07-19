@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["sdk", "hello", "pixels"]
+members = ["sdk", "hello", "pixels", "solitaire"]
 
 [profile.release]
 opt-level = 2

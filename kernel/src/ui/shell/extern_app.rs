@@ -25,9 +25,12 @@ use crate::obj::Object;
 // Window protocol opcodes — mirror apps/sdk/src/window.rs.
 const OP_OPEN: u32 = 1;
 const OP_OPENED: u32 = 2;
+const OP_PRESENT: u32 = 3;
 const OP_CHAR: u32 = 16;
 const OP_KEY: u32 = 17;
 const OP_CLOSE_REQ: u32 = 18;
+const OP_POINTER: u32 = 19;
+const OP_BUTTON: u32 = 20;
 
 /// A spawned userspace process that may open a window. Handed from the
 /// terminal to the shell via `SPAWN_QUEUE`.
@@ -77,6 +80,9 @@ pub struct ExternApp {
     /// Keep the surface alive for as long as we might blit it, even if the
     /// app's process exits mid-frame.
     _surface: Arc<MemObj>,
+    /// Completed frame captured from the surface on `PRESENT`. Blitting this
+    /// instead of the live surface keeps half-drawn app frames off screen.
+    snapshot: Vec<u32>,
     closed: bool,
 }
 
@@ -125,22 +131,41 @@ impl ExternApp {
                 h,
                 surface_pa,
                 _surface: surface,
+                snapshot: Vec::new(),
                 closed: false,
             });
         }
     }
 
     /// Drain protocol messages from the app; returns true once it closes
-    /// (peer gone). `PRESENT` needs no handling — we blit every frame.
+    /// (peer gone). `PRESENT` snapshots the surface as the completed frame.
     pub fn pump(&mut self) -> bool {
+        let mut present = false;
         loop {
             match self.ch.recv() {
-                Ok(_) => {}
+                Ok(m) => {
+                    if m.bytes.len() >= 4 && le_u32(&m.bytes, 0) == OP_PRESENT {
+                        present = true;
+                    }
+                }
                 Err(ST_SHOULD_WAIT) => break,
                 Err(_) => {
                     self.closed = true;
                     break;
                 }
+            }
+        }
+        if present {
+            let src = unsafe {
+                core::slice::from_raw_parts(
+                    self.surface_pa as *const u32,
+                    (self.w * self.h) as usize,
+                )
+            };
+            if self.snapshot.len() != src.len() {
+                self.snapshot = src.to_vec();
+            } else {
+                self.snapshot.copy_from_slice(src);
             }
         }
         self.closed
@@ -175,9 +200,17 @@ impl App for ExternApp {
         !self.closed
     }
     fn draw(&mut self, s: &mut Surface, _fonts: &mut Fonts, body: Rect, _focused: bool, _now: u64) {
-        // Blit the app's BGRA surface 1:1, clipped to the window body.
-        let src = unsafe {
-            core::slice::from_raw_parts(self.surface_pa as *const u32, (self.w * self.h) as usize)
+        // Blit the last presented frame 1:1, clipped to the window body.
+        // Before the first PRESENT, fall back to the live surface.
+        let src: &[u32] = if self.snapshot.is_empty() {
+            unsafe {
+                core::slice::from_raw_parts(
+                    self.surface_pa as *const u32,
+                    (self.w * self.h) as usize,
+                )
+            }
+        } else {
+            &self.snapshot
         };
         let cw = (self.w as i32).min(body.w.max(0));
         let ch = (self.h as i32).min(body.h.max(0));
@@ -197,6 +230,22 @@ impl App for ExternApp {
         let mut b = OP_KEY.to_le_bytes().to_vec();
         b.extend_from_slice(&code.to_le_bytes());
         b.push(1); // key down
+        self.send(b);
+    }
+    fn wants_pointer(&self) -> bool {
+        true
+    }
+    fn on_pointer_move(&mut self, x: i32, y: i32) {
+        let mut b = OP_POINTER.to_le_bytes().to_vec();
+        b.extend_from_slice(&x.to_le_bytes());
+        b.extend_from_slice(&y.to_le_bytes());
+        self.send(b);
+    }
+    fn on_button(&mut self, down: bool, x: i32, y: i32) {
+        let mut b = OP_BUTTON.to_le_bytes().to_vec();
+        b.push(down as u8);
+        b.extend_from_slice(&x.to_le_bytes());
+        b.extend_from_slice(&y.to_le_bytes());
         self.send(b);
     }
     fn on_close_request(&mut self) {
