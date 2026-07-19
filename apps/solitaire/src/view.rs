@@ -303,7 +303,7 @@ pub fn draw_scene(c: &mut Canvas, g: &Game, drag: Option<&DragView>, status: &st
     }
 
     // Status line, bottom-left.
-    c.draw_text(MARGIN, WIN_H - 20, status, 1, gfx::TX3);
+    c.draw_ui_text(MARGIN, WIN_H - 26, status, gfx::TX3);
 
     if let Some(d) = drag {
         draw_ghost(c, d.x, d.y, d.cards);

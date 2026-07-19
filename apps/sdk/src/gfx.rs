@@ -4,6 +4,7 @@
 //! surface.rs`); colors are 0xAARRGGBB.
 
 use crate::font8x8::{FONT8X8, GLYPH_H, GLYPH_W};
+use crate::uifont;
 
 // Meridian design tokens the SDK re-exports for app use. Values mirror
 // `kernel/src/ui/shell/tokens.rs` (source of truth:
@@ -282,4 +283,32 @@ impl<'a> Canvas<'a> {
 /// Pixel size of `s` drawn with `draw_text` at `scale`.
 pub fn measure_text(s: &str, scale: i32) -> (i32, i32) {
     (s.chars().count() as i32 * GLYPH_W * scale, GLYPH_H * scale)
+}
+
+impl<'a> Canvas<'a> {
+    /// Draw `s` with the anti-aliased proportional UI font (Geist SemiBold
+    /// 15px); `y` is the top of the line box. Non-ASCII chars are skipped.
+    pub fn draw_ui_text(&mut self, x: i32, y: i32, s: &str, color: u32) {
+        let baseline = y + uifont::ASCENT;
+        let mut pen = x;
+        for ch in s.chars() {
+            let Some(g) = uifont::GLYPHS.get((ch as usize).wrapping_sub(32)) else {
+                continue;
+            };
+            if g.w > 0 {
+                self.draw_alpha_mask(pen + g.ox, baseline - g.oy, g.data, g.w, g.h, color);
+            }
+            pen += g.adv;
+        }
+    }
+}
+
+/// Pixel size of `s` drawn with `draw_ui_text`.
+pub fn measure_ui_text(s: &str) -> (i32, i32) {
+    let w = s
+        .chars()
+        .filter_map(|ch| uifont::GLYPHS.get((ch as usize).wrapping_sub(32)))
+        .map(|g| g.adv)
+        .sum();
+    (w, uifont::LINE_H)
 }

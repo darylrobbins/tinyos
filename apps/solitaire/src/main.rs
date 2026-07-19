@@ -114,6 +114,8 @@ fn main(env: Env) -> i32 {
     let mut moves: u32 = 0;
     let mut drag: Option<Drag> = None;
     let mut anim: Option<WinAnim> = None;
+    // Endgame auto-play: one card per frame flies to the foundations.
+    let mut finishing = false;
     let mut ui_in = UiInput::default();
     let mut last_press: Option<(Hit, u64)> = None;
     let mut events = Vec::new();
@@ -129,10 +131,11 @@ fn main(env: Env) -> i32 {
             match *ev {
                 Event::CloseRequested => return 0,
                 Event::Char('n') | Event::Char('N') => new_game = true,
-                Event::Button { down: true, x, y } if anim.is_none() => {
+                Event::Char('f') | Event::Char('F') if game.can_autofinish() => finishing = true,
+                Event::Button { down: true, x, y } if anim.is_none() && !finishing => {
                     on_press(&mut game, &mut drag, &mut moves, &mut last_press, x, y);
                 }
-                Event::Button { down: false, x, y } if anim.is_none() => {
+                Event::Button { down: false, x, y } if anim.is_none() && !finishing => {
                     on_release(&mut game, &mut drag, &mut moves, x, y);
                 }
                 Event::PointerMoved { x, y } => {
@@ -144,8 +147,17 @@ fn main(env: Env) -> i32 {
             }
         }
 
+        if finishing {
+            if game.autofinish_step() {
+                moves += 1;
+            } else {
+                finishing = false;
+            }
+        }
+
         if anim.is_none() && game.is_won() {
             anim = Some(WinAnim::new(&game, uptime_us()));
+            finishing = false;
         }
 
         // Draw. During the win cascade the frame persists (card trails); in
@@ -154,13 +166,19 @@ fn main(env: Env) -> i32 {
         match anim.as_mut() {
             Some(a) => {
                 a.step(&mut c);
-                let msg = "You won!";
-                let (tw, _) = gfx::measure_text(msg, 4);
-                c.draw_text((w - tw) / 2, h / 2 - 60, msg, 4, gfx::ACC);
+                let banner = &glyphs::BANNER_WON;
+                c.draw_alpha_mask(
+                    (w - banner.w) / 2,
+                    h / 2 - 60 - banner.h / 2,
+                    banner.data,
+                    banner.w,
+                    banner.h,
+                    gfx::ACC,
+                );
                 if a.done {
-                    let hint = "press N or New Game to deal again";
-                    let (hw, _) = gfx::measure_text(hint, 1);
-                    c.draw_text((w - hw) / 2, h / 2, hint, 1, gfx::TX2);
+                    let hint = "Press N or New Game to deal again";
+                    let (hw, _) = gfx::measure_ui_text(hint);
+                    c.draw_ui_text((w - hw) / 2, h / 2 + 10, hint, gfx::TX2);
                 }
             }
             None => {
@@ -182,6 +200,12 @@ fn main(env: Env) -> i32 {
         if ui::button(&mut c, &ui_in, Rect::new(123, 8, 80, 26), draw_label) {
             toggle_draw = true;
         }
+        // Endgame shortcut: only offered once nothing is hidden anymore.
+        if !finishing && anim.is_none() && game.can_autofinish() {
+            if ui::button(&mut c, &ui_in, Rect::new(215, 8, 76, 26), "Finish") {
+                finishing = true;
+            }
+        }
         win.present_from(&back);
 
         if new_game || toggle_draw {
@@ -194,6 +218,7 @@ fn main(env: Env) -> i32 {
             moves = 0;
             drag = None;
             anim = None;
+            finishing = false;
             last_press = None;
             // Immediate-mode buttons fire after this frame already drew the
             // old state; redraw right away instead of sleeping on it.
@@ -201,7 +226,7 @@ fn main(env: Env) -> i32 {
         }
 
         // ~30fps while something is in motion; otherwise sleep until input.
-        let busy = drag.is_some() || anim.as_ref().is_some_and(|a| !a.done);
+        let busy = drag.is_some() || finishing || anim.as_ref().is_some_and(|a| !a.done);
         let dt = if busy { 33_000 } else { 1_000_000 };
         win.wait(uptime_us() + dt);
     }

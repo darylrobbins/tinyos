@@ -2,7 +2,7 @@
 //! a per-frame `UiInput`, then call widget functions during drawing. Styled to
 //! the Meridian design language.
 
-use crate::gfx::{self, measure_text, Canvas, Rect};
+use crate::gfx::{self, measure_ui_text, Canvas, Rect};
 use crate::window::Event;
 
 /// Per-frame pointer snapshot for immediate-mode hit testing.
@@ -56,18 +56,12 @@ pub fn button(c: &mut Canvas, ui: &UiInput, r: Rect, label: &str) -> bool {
     let radius = r.h / 2;
     c.fill_rounded_rect(r, radius, fill);
     c.stroke_rounded_rect(r, radius, 1, if hover { gfx::STROKE2 } else { gfx::STROKE });
-    let (tw, th) = measure_text(label, 1);
-    c.draw_text(
-        r.x + (r.w - tw) / 2,
-        r.y + (r.h - th) / 2 + 1,
-        label,
-        1,
-        gfx::ACC,
-    );
+    let (tw, th) = measure_ui_text(label);
+    c.draw_ui_text(r.x + (r.w - tw) / 2, r.y + (r.h - th) / 2, label, gfx::ACC);
     hover && ui.released.is_some()
 }
 
-/// A plain text label.
+/// A plain text label in the UI font.
 pub fn label(c: &mut Canvas, x: i32, y: i32, text: &str, color: u32) {
-    c.draw_text(x, y, text, 1, color);
+    c.draw_ui_text(x, y, text, color);
 }

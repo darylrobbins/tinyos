@@ -22,6 +22,7 @@ mod font8x8;
 pub mod gfx;
 pub mod syscall;
 pub mod ui;
+pub mod uifont;
 pub mod wait;
 pub mod window;
 

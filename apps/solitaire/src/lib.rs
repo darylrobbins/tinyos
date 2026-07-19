@@ -198,6 +198,34 @@ impl Game {
     pub fn is_won(&self) -> bool {
         self.foundations.iter().all(|f| f.len() == 13)
     }
+
+    /// The game is effectively over: no hidden information remains (stock and
+    /// waste empty, every tableau card face-up), so stacking to the
+    /// foundations is mechanical.
+    pub fn can_autofinish(&self) -> bool {
+        self.stock.is_empty()
+            && self.waste.is_empty()
+            && self.tableau.iter().flatten().all(|c| c.face_up)
+            && !self.is_won()
+    }
+
+    /// Play one mechanical endgame move (the lowest-ranked eligible tableau
+    /// top to its foundation). Returns false when no move was made.
+    pub fn autofinish_step(&mut self) -> bool {
+        let mut best: Option<(u8, usize)> = None;
+        for (p, pile) in self.tableau.iter().enumerate() {
+            if let Some(top) = pile.last() {
+                let fits = (0..4).any(|f| self.fits_foundation(f, *top));
+                if fits && best.is_none_or(|(r, _)| top.rank < r) {
+                    best = Some((top.rank, p));
+                }
+            }
+        }
+        match best {
+            Some((_, p)) => self.auto_to_foundation(Loc::Tableau(p)),
+            None => false,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -451,6 +479,57 @@ mod tests {
         // No fit -> false.
         g.waste = vec![card(9, Suit::Spades)];
         assert!(!g.auto_to_foundation(Loc::Waste));
+    }
+
+    #[test]
+    fn can_autofinish_requires_no_hidden_cards() {
+        let mut g = empty_game();
+        g.tableau[0] = vec![card(2, Suit::Hearts)];
+        g.foundations[0] = vec![card(1, Suit::Hearts)];
+        assert!(g.can_autofinish());
+        // A face-down card blocks it.
+        g.tableau[1] = vec![Card { rank: 9, suit: Suit::Clubs, face_up: false }];
+        assert!(!g.can_autofinish());
+        g.tableau[1].clear();
+        // Stock or waste cards block it.
+        g.stock = vec![Card { rank: 9, suit: Suit::Clubs, face_up: false }];
+        assert!(!g.can_autofinish());
+        g.stock.clear();
+        g.waste = vec![card(9, Suit::Clubs)];
+        assert!(!g.can_autofinish());
+    }
+
+    #[test]
+    fn autofinish_step_moves_lowest_eligible_top() {
+        let mut g = empty_game();
+        g.foundations[0] = vec![card(1, Suit::Hearts)];
+        g.foundations[1] = vec![card(1, Suit::Spades), card(2, Suit::Spades)];
+        g.tableau[0] = vec![card(3, Suit::Spades)];
+        g.tableau[1] = vec![card(2, Suit::Hearts)];
+        // 2H is the lowest eligible top, so it moves first.
+        assert!(g.autofinish_step());
+        assert_eq!(g.foundations[0].len(), 2);
+        assert!(g.autofinish_step());
+        assert_eq!(g.foundations[1].len(), 3);
+        assert!(!g.autofinish_step());
+    }
+
+    #[test]
+    fn autofinish_steps_complete_a_stacked_endgame() {
+        let mut g = empty_game();
+        // Two suits fully on foundations, two suits laid out as tableau runs.
+        g.foundations[0] = (1..=13).map(|r| card(r, Suit::Spades)).collect();
+        g.foundations[1] = (1..=13).map(|r| card(r, Suit::Clubs)).collect();
+        g.tableau[0] = (1..=13).rev().map(|r| card(r, Suit::Hearts)).collect();
+        g.tableau[1] = (1..=13).rev().map(|r| card(r, Suit::Diamonds)).collect();
+        assert!(g.can_autofinish());
+        let mut steps = 0;
+        while g.autofinish_step() {
+            steps += 1;
+            assert!(steps <= 26, "autofinish must terminate");
+        }
+        assert_eq!(steps, 26);
+        assert!(g.is_won());
     }
 
     #[test]
