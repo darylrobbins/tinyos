@@ -57,6 +57,9 @@ struct RunningApp {
     sent_size: (usize, usize),
     /// Full-screen text surface, when the app has one open.
     surface: Option<AppSurface>,
+    /// Bottom-pinned live region (lines keep scrolling above it). Mutually
+    /// exclusive with `surface`; opening one closes the other.
+    live: Option<AppSurface>,
 }
 
 /// A hosted full-screen cell surface (console protocol SURFACE_*). The cell
@@ -573,6 +576,7 @@ impl Terminal {
                         input_mode: abi::console::INPUT_MODE_LINES,
                         sent_size: (0, 0), // forces the initial OP_RESIZE
                         surface: None,
+                        live: None,
                     });
                     // The shell prompt makes way for the app's own output;
                     // restored when the app exits.
@@ -641,6 +645,7 @@ impl Terminal {
                                 cursor: (0, 0, 0, false),
                             };
                             s.snap(0, 0, scols, srows);
+                            app.live = None; // exclusive with the live region
                             app.surface = Some(s);
                             // Spec: RESIZE is (re)sent after any open.
                             app.sent_size = (0, 0);
@@ -648,7 +653,7 @@ impl Terminal {
                     }
                 }
                 OP_SURFACE_PRESENT if msg.bytes.len() >= 20 => {
-                    if let Some(s) = &mut app.surface {
+                    if let Some(s) = app.surface.as_mut().or(app.live.as_mut()) {
                         let f = |o: usize| {
                             u32::from_le_bytes(msg.bytes[o..o + 4].try_into().unwrap()) as usize
                         };
@@ -656,7 +661,7 @@ impl Terminal {
                     }
                 }
                 OP_SURFACE_CURSOR if msg.bytes.len() >= 20 => {
-                    if let Some(s) = &mut app.surface {
+                    if let Some(s) = app.surface.as_mut().or(app.live.as_mut()) {
                         let f = |o: usize| {
                             u32::from_le_bytes(msg.bytes[o..o + 4].try_into().unwrap())
                         };
@@ -664,6 +669,41 @@ impl Terminal {
                     }
                 }
                 OP_SURFACE_CLOSE => app.surface = None,
+                OP_LIVE_OPEN | OP_LIVE_RESIZE if msg.bytes.len() >= 8 => {
+                    let lrows =
+                        u32::from_le_bytes(msg.bytes[4..8].try_into().unwrap()) as usize;
+                    let mem = msg.handles.iter().find_map(|h| match &h.object {
+                        crate::obj::Object::MemObj(m) => Some(m.clone()),
+                        _ => None,
+                    });
+                    if let Some(mem) = mem {
+                        // Region width = terminal width at open time.
+                        let ok = (1..=16).contains(&lrows)
+                            && cols >= 1
+                            && mem.size() >= cols * lrows * 16;
+                        if ok {
+                            let mut s = AppSurface {
+                                mem,
+                                cols,
+                                rows: lrows,
+                                cells: alloc::vec![
+                                    abi::console::Cell::default();
+                                    cols * lrows
+                                ],
+                                cursor: (0, 0, 0, false),
+                            };
+                            s.snap(0, 0, cols, lrows);
+                            app.surface = None; // exclusive with full screen
+                            app.live = Some(s);
+                        }
+                    }
+                }
+                OP_LIVE_CLOSE => {
+                    // Flatten the final frame into scrollback.
+                    if let Some(s) = app.live.take() {
+                        lines.extend(flatten_cells(&s));
+                    }
+                }
                 _ => {}
             }
         }
@@ -697,8 +737,14 @@ impl Terminal {
             });
         }
         if let Some(code) = exited {
-            // Flush any trailing partial line, then report.
+            // Flatten a live region's last frame, flush any trailing partial
+            // line, then report.
             let app = self.running.take().unwrap();
+            if let Some(s) = &app.live {
+                for (line, color) in flatten_cells(s) {
+                    self.out(line, color);
+                }
+            }
             if !app.partial.is_empty() {
                 self.out(app.partial, FG);
             }
@@ -728,8 +774,43 @@ impl Terminal {
         if let Some(s) = self.running.as_ref().and_then(|a| a.surface.as_ref()) {
             return draw_cells(s, surface, fonts, ox, oy, self.view.cols, rows, now_ms);
         }
-        self.view.draw(surface, fonts, ox, oy, rows, now_ms, true);
+        // Live region: pinned to the bottom, scrollback keeps the rest.
+        let live_rows = self
+            .running
+            .as_ref()
+            .and_then(|a| a.live.as_ref())
+            .map(|s| s.rows.min(rows.saturating_sub(1)))
+            .unwrap_or(0);
+        self.view
+            .draw(surface, fonts, ox, oy, rows - live_rows, now_ms, true);
+        if live_rows > 0 {
+            let s = self.running.as_ref().unwrap().live.as_ref().unwrap();
+            let ly = oy + (rows - live_rows) as i32 * CELL_H;
+            draw_cells(s, surface, fonts, ox, ly, self.view.cols, live_rows, now_ms);
+        }
     }
+}
+
+/// Flatten a cell surface into plain scrollback lines (glyphs only; per-cell
+/// colors collapse to the default, trailing blanks trimmed).
+fn flatten_cells(s: &AppSurface) -> Vec<(String, u32)> {
+    use abi::console::ATTR_WIDE_CONT;
+    let mut out = Vec::with_capacity(s.rows);
+    for row in 0..s.rows {
+        let mut line = String::new();
+        for col in 0..s.cols {
+            let cell = s.cells[row * s.cols + col];
+            if cell.attrs & ATTR_WIDE_CONT != 0 {
+                continue;
+            }
+            match char::from_u32(cell.glyph).filter(|c| *c != '\0') {
+                Some(c) => line.push(c),
+                None => line.push(' '),
+            }
+        }
+        out.push((line.trim_end().to_string(), FG));
+    }
+    out
 }
 
 /// Render a hosted cell surface. Colors with a zero alpha byte take the

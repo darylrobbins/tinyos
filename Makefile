@@ -64,7 +64,7 @@ build: apps
 # Third-party userspace apps: a separate workspace (aarch64-unknown-none),
 # staged under $(STAGE)/apps and baked into the tinyfs image when the disk is
 # created (see $(DISK) below). aarch64 only for now (userspace is aarch64-first).
-APP_BINS := hello pixels solitaire greet tui
+APP_BINS := hello pixels solitaire greet tui progress
 STAGE    := $(BUILD)/stage
 apps:
 ifeq ($(ARCH),aarch64)

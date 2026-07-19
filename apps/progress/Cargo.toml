@@ -1,0 +1,13 @@
+[package]
+name = "progress"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tinyos-app = { path = "../sdk" }
+textui = { path = "../../crates/textui" }
+abi = { package = "tinyos-abi", path = "../../crates/abi" }
+
+[[bin]]
+name = "progress"
+path = "src/main.rs"

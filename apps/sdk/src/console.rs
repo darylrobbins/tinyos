@@ -187,6 +187,63 @@ impl TextSurface {
     }
 }
 
+/// A bottom-pinned live cell region (console protocol LIVE_*): `WRITE`d
+/// lines keep scrolling above while the app redraws this area in place —
+/// the Ink-style static/dynamic split. On close (or exit) the terminal
+/// flattens the final frame into scrollback.
+pub struct LiveRegion {
+    ch: Channel,
+    pub cols: u32,
+    pub rows: u32,
+    va: u64,
+}
+
+impl Console {
+    /// Open a live region `rows` tall spanning the terminal width. Needs a
+    /// Resize event first (the terminal sends one at startup) so the width
+    /// is known; fails with ST_SHOULD_WAIT before that.
+    pub fn open_live(&mut self, rows: u32) -> Result<LiveRegion, u32> {
+        use crate::syscall::*;
+        let cols = self.cols;
+        if cols == 0 {
+            return Err(ST_SHOULD_WAIT);
+        }
+        let size = (cols as u64 * rows as u64 * 16 + 0xFFF) & !0xFFF;
+        let mem = syscall1(SYS_MEMOBJ_CREATE, size).ok()?;
+        let dup = syscall2(SYS_HANDLE_DUP, mem, RIGHTS_ALL as u64).ok()? as u32;
+        let va = syscall3(SYS_MEMOBJ_MAP, mem, 0, size).ok()?;
+        let mut msg = OP_LIVE_OPEN.to_le_bytes().to_vec();
+        msg.extend_from_slice(&rows.to_le_bytes());
+        self.ch.send(&msg, &[dup])?;
+        Ok(LiveRegion { ch: self.ch, cols, rows, va })
+    }
+}
+
+impl LiveRegion {
+    /// The shared cell grid (row-major, stride = cols).
+    pub fn cells(&mut self) -> &mut [Cell] {
+        unsafe {
+            core::slice::from_raw_parts_mut(
+                self.va as *mut Cell,
+                (self.cols * self.rows) as usize,
+            )
+        }
+    }
+
+    pub fn present_all(&self) {
+        let mut msg = OP_SURFACE_PRESENT.to_le_bytes().to_vec();
+        for v in [0, 0, self.cols, self.rows] {
+            msg.extend_from_slice(&v.to_le_bytes());
+        }
+        let _ = self.ch.send(&msg, &[]);
+    }
+
+    /// Close; the terminal flattens the last frame into scrollback.
+    pub fn close(self) {
+        let _ = self.ch.send(&OP_LIVE_CLOSE.to_le_bytes(), &[]);
+    }
+}
+
 impl Write for Console {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         self.write_bytes(s.as_bytes());
