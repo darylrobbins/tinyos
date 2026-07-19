@@ -94,8 +94,20 @@ pub fn note_busy(cpu: usize) {
     }
 }
 
-/// Wake other CPUs so they notice new ready threads. Real IPI lands with SMP.
-pub fn kick_others(_from: usize) {}
+/// Poke every other CPU out of hlt so it re-runs its scheduler pass.
+pub fn kick_others(from: usize) {
+    for cpu in 0..super::MAX_CPUS {
+        if cpu != from {
+            super::apic::send_ipi(cpu, super::apic::VEC_IPI);
+        }
+    }
+}
+
+/// Called from the IPI-vector gate.
+pub fn on_ipi() {
+    RESCHED[super::cpu_id()].store(true, Ordering::Release);
+    apic::eoi();
+}
 
 /// (wakes per second, idle percent) for one CPU over its last ~1s window.
 pub fn wake_stats(cpu: usize) -> (u32, u32) {

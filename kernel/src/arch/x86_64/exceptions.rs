@@ -121,6 +121,9 @@ pub fn install() {
     extern "x86-interrupt" fn input_gate(_f: StackFrame) {
         super::irq::on_input_irq();
     }
+    extern "x86-interrupt" fn ipi_gate(_f: StackFrame) {
+        super::irq::on_ipi();
+    }
     extern "x86-interrupt" fn spurious_gate(_f: StackFrame) {
         // No EOI for spurious interrupts.
     }
@@ -134,10 +137,23 @@ pub fn install() {
         for v in super::apic::VEC_INPUT_BASE..super::apic::VEC_INPUT_BASE + 8 {
             idt[v as usize].set(input_gate as u64, cs);
         }
+        idt[super::apic::VEC_IPI as usize].set(ipi_gate as u64, cs);
         idt[0xFF].set(spurious_gate as u64, cs);
         let idtr = Idtr {
             limit: (size_of::<[Entry; 256]>() - 1) as u16,
             base: idt.as_ptr() as u64,
+        };
+        asm!("lidt [{0}]", in(reg) &idtr);
+    }
+}
+
+/// Load the already-populated IDT on an AP.
+pub fn load() {
+    unsafe {
+        let idt = &raw const IDT;
+        let idtr = Idtr {
+            limit: (size_of::<[Entry; 256]>() - 1) as u16,
+            base: idt as u64,
         };
         asm!("lidt [{0}]", in(reg) &idtr);
     }

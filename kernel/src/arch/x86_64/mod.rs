@@ -3,6 +3,7 @@ pub mod context;
 pub mod exceptions;
 pub mod io;
 pub mod irq;
+pub mod smp;
 pub mod timer;
 
 use core::arch::asm;

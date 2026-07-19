@@ -21,7 +21,7 @@ FLASH        = -drive if=pflash,format=raw,readonly=on,file=$(BUILD)/code-$(ARCH
 else ifeq ($(ARCH),x86_64)
 TARGET      := x86_64-unknown-uefi
 QEMU        := qemu-system-x86_64
-MACHINE     := -machine q35
+MACHINE     := -machine q35 -smp 4
 ACCEL       := -accel tcg
 BOOT_EFI    := BOOTX64.EFI
 EDK2_CODE    = $(QEMU_SHARE)/edk2-x86_64-code.fd

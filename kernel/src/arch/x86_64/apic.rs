@@ -17,7 +17,11 @@ const TIMER_DIV: usize = 0x3E0;
 
 pub const VEC_TIMER: u8 = 48;
 pub const VEC_INPUT_BASE: u8 = 49;
+pub const VEC_IPI: u8 = 57;
 const VEC_SPURIOUS: u8 = 0xFF;
+
+const ICR_LO: usize = 0x300;
+const ICR_HI: usize = 0x310;
 
 /// LAPIC timer ticks per microsecond (calibrated once at init).
 static TICKS_PER_US: AtomicU64 = AtomicU64::new(0);
@@ -50,6 +54,21 @@ pub fn init() {
     let elapsed_ticks = u32::MAX - lapic_r(TIMER_CURR);
     lapic_w(TIMER_INIT, 0);
     TICKS_PER_US.store((elapsed_ticks as u64 / 10_000).max(1), Ordering::Relaxed);
+}
+
+/// Per-AP LAPIC setup: software-enable + timer divider. Timer calibration
+/// is shared — all LAPIC timers run off the same crystal.
+pub fn init_ap() {
+    lapic_w(SVR, 0x100 | VEC_SPURIOUS as u32);
+    lapic_w(TIMER_DIV, 0x3);
+    lapic_w(LVT_TIMER, 1 << 16);
+}
+
+/// Fixed-delivery IPI to one CPU (LAPIC ID == cpu index on QEMU).
+pub fn send_ipi(cpu: usize, vector: u8) {
+    lapic_w(ICR_HI, (cpu as u32) << 24);
+    lapic_w(ICR_LO, vector as u32);
+    while lapic_r(ICR_LO) & (1 << 12) != 0 {} // wait for delivery
 }
 
 /// Arm the LAPIC timer to fire once at `deadline_us`.

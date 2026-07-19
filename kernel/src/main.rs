@@ -43,6 +43,9 @@ fn main() -> Status {
         fb.format
     );
 
+    #[cfg(target_arch = "x86_64")]
+    arch::smp::park_aps();
+
     kprintln!("tinyos: exiting boot services");
     let memory_map = unsafe { boot::exit_boot_services(Some(MemoryType::LOADER_DATA)) };
 
@@ -149,7 +152,6 @@ static UI_STATE: spin::Once<spin::Mutex<Option<UiState>>> = spin::Once::new();
 fn ui_thread_main() {
     let (fb, mut surface, mut fonts, mut input) =
         UI_STATE.get().unwrap().lock().take().expect("ui state");
-    #[cfg(target_arch = "aarch64")]
     crate::arch::smp::start_secondary_cpus();
 
     let mut shell = ui::shell::Shell::new(fb.width, fb.height);
