@@ -68,9 +68,15 @@ pub struct UserInit {
 unsafe impl Send for Thread {}
 unsafe impl Sync for Thread {}
 
+/// Written at the base (overflow end) of every allocated kernel stack and
+/// checked on each switch-in — detection, not prevention: true guard pages
+/// need kernel VM the identity map doesn't provide.
+pub const STACK_CANARY: u64 = 0xDEAD_57AC_CA4A_21E5;
+
 impl Thread {
     pub fn new(id: u32, name: String, class: Class, affinity: u8, entry: fn()) -> Self {
-        let stack = alloc::vec![0u8; STACK_SIZE].into_boxed_slice();
+        let mut stack = alloc::vec![0u8; STACK_SIZE].into_boxed_slice();
+        stack[..8].copy_from_slice(&STACK_CANARY.to_le_bytes());
         let top = stack.as_ptr() as u64 + STACK_SIZE as u64;
         Self {
             id,
@@ -129,6 +135,15 @@ impl Thread {
             user: None,
             proc: None,
             user_ttbr1: 0,
+        }
+    }
+
+    /// False if the stack-base canary was overwritten (stack overflow).
+    /// Always true for adopted boot/AP stacks, which have no canary.
+    pub fn stack_ok(&self) -> bool {
+        match &self._stack {
+            Some(s) => s[..8] == STACK_CANARY.to_le_bytes(),
+            None => true,
         }
     }
 

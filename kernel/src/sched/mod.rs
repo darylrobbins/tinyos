@@ -238,6 +238,16 @@ pub(crate) fn schedule(handoff: Handoff) {
 /// Only NOW may the previous thread be picked up by another CPU — its
 /// context save is complete.
 fn finish_switch() {
+    // Catch silent kernel-stack overflow at the earliest safe moment: we're
+    // on the incoming thread's stack, so a corrupted canary means its lowest
+    // page was already written. Panic loudly rather than corrupt the heap
+    // further.
+    {
+        let cur = current();
+        if !cur.stack_ok() {
+            panic!("kernel stack overflow: thread {} ({})", cur.id, cur.name);
+        }
+    }
     let cpu = cpu_id();
     let handoff = core::mem::replace(&mut CPUS[cpu].lock().handoff, Handoff::None);
     match handoff {
