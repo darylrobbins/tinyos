@@ -11,6 +11,7 @@ mod arch;
 mod drivers;
 mod gfx;
 mod mem;
+mod sched;
 mod term;
 mod ui;
 
@@ -128,8 +129,26 @@ fn kmain(mut fb: FbInfo, memory_map: MemoryMapOwned) -> ! {
     kprintln!("tinyos: splash done (uptime {} ms)", arch::timer::uptime_ms());
 
     FB_SIZE.call_once(|| (fb.width, fb.height));
-    let mut input = drivers::input::Input::init();
+    let input = drivers::input::Input::init();
     arch::irq::init();
+    kprintln!("tinyos: starting scheduler on cpu{}", arch::cpu_id());
+
+    // Hand the UI's owned state to its thread; spin::Once is just transport.
+    UI_STATE.call_once(|| spin::Mutex::new(Some((fb, surface, fonts, input))));
+    sched::start(ui_thread_main)
+}
+
+type UiState = (
+    FbInfo,
+    gfx::surface::Surface,
+    gfx::font::Fonts,
+    drivers::input::Input,
+);
+static UI_STATE: spin::Once<spin::Mutex<Option<UiState>>> = spin::Once::new();
+
+fn ui_thread_main() {
+    let (fb, mut surface, mut fonts, mut input) =
+        UI_STATE.get().unwrap().lock().take().expect("ui state");
     let mut shell = ui::shell::Shell::new(fb.width, fb.height);
     kprintln!("tinyos: shell up");
 
@@ -158,6 +177,8 @@ fn kmain(mut fb: FbInfo, memory_map: MemoryMapOwned) -> ! {
         }
 
         deadline = shell.next_deadline(now);
+        // Interim until wait queues land: let peers run, then sleep.
+        sched::yield_now();
         arch::irq::sleep_until(deadline);
     }
 }

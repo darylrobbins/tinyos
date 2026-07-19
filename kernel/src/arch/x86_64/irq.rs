@@ -85,6 +85,9 @@ pub fn note_busy(cpu: usize) {
     }
 }
 
+/// Wake other CPUs so they notice new ready threads. Real IPI lands with SMP.
+pub fn kick_others(_from: usize) {}
+
 /// (wakes per second, idle percent) for one CPU over its last ~1s window.
 pub fn wake_stats(cpu: usize) -> (u32, u32) {
     (
