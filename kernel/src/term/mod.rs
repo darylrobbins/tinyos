@@ -216,6 +216,23 @@ impl Terminal {
                 Ok(id) => self.out(format!("kill: no such thread {id}"), ERR),
                 Err(_) => self.out("usage: kill <id>".to_string(), ERR),
             },
+            "ls" => {
+                let path = rest.trim();
+                match crate::fs::list(path) {
+                    Some(entries) if entries.is_empty() => self.out("(empty)".to_string(), DIM),
+                    Some(mut entries) => {
+                        entries.sort_by(|a, b| (b.2, &a.0).cmp(&(a.2, &b.0)));
+                        for (name, size, is_dir) in entries {
+                            if is_dir {
+                                self.out(format!("{name}/"), ACCENT);
+                            } else {
+                                self.out(format!("{name:<24} {size}"), FG);
+                            }
+                        }
+                    }
+                    None => self.out(format!("ls: cannot access '{path}'"), ERR),
+                }
+            }
             "usertest" => self.usertest(rest.trim()),
             "objtest" => {
                 for line in crate::obj::objtest::run() {

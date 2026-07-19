@@ -131,6 +131,18 @@ pub fn boot_hook() {
             Ok(id) => kprintln!("tinyos: boottest spawned EL0 sys-test thread {id}"),
             Err(e) => kprintln!("tinyos: boottest FAILED: {e}"),
         },
+        Some("fs") => {
+            for path in ["/", "/EFI/BOOT"] {
+                match crate::fs::list(path) {
+                    Some(entries) => {
+                        for (name, size, is_dir) in entries {
+                            kprintln!("tinyos: fstest {path} -> {name}{} {size}", if is_dir { "/" } else { "" });
+                        }
+                    }
+                    None => kprintln!("tinyos: fstest {path} FAILED"),
+                }
+            }
+        }
         Some("obj") => {
             for line in super::objtest::run() {
                 kprintln!("tinyos: objtest {line}");

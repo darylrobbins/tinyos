@@ -9,6 +9,7 @@ mod logger;
 mod apps;
 mod arch;
 mod drivers;
+mod fs;
 mod gfx;
 mod mem;
 mod obj;
