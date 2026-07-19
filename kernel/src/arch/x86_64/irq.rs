@@ -110,7 +110,13 @@ pub fn on_ipi() {
 }
 
 /// (wakes per second, idle percent) for one CPU over its last ~1s window.
+/// A window that hasn't rolled in >2s means the CPU is in a long sleep
+/// (busy CPUs roll every second via note_busy): report it fully idle.
 pub fn wake_stats(cpu: usize) -> (u32, u32) {
+    let start = WINDOW_START_US[cpu].load(Ordering::Relaxed);
+    if super::timer::uptime_us().saturating_sub(start) > 2_000_000 {
+        return (0, 100);
+    }
     (
         LAST_RATE[cpu].load(Ordering::Relaxed),
         LAST_IDLE_PCT[cpu].load(Ordering::Relaxed),

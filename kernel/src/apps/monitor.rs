@@ -104,22 +104,26 @@ impl App for MonitorApp {
     }
 
     fn preferred_size(&self, _sw: i32, _sh: i32) -> (i32, i32) {
-        (420, 360)
+        (420, 430)
     }
 
     fn draw(&mut self, s: &mut Surface, fonts: &mut Fonts, body: Rect, _focused: bool, _now: u64) {
         let (used, free) = mem::stats();
         let col_w = body.w;
 
-        // IDLE bar-meter: percent of the last second spent in wfi.
-        let (_wakes, idle_pct) = crate::arch::irq::wake_stats(0);
-        fonts.ui_medium.draw(s, "Idle", 13.0, body.x + col_w / 2 + 10, body.y, TEXT_DIM);
+        // Per-CPU load bars: busy % = 100 - idle % over the last second.
         let ix = body.x + col_w / 2 + 10;
         let iw = col_w / 2 - 10;
-        s.fill_rect(ix, body.y + 22, iw, 6, SURFACE_HI);
-        s.fill_rect(ix, body.y + 22, (iw * idle_pct as i32 / 100).max(2), 6, ACCENT);
-        let idle_txt = format!("{idle_pct}%");
-        fonts.mono.draw(s, &idle_txt, 14.0, ix, body.y + 36, TEXT_DIM);
+        fonts.ui_medium.draw(s, "CPU", 13.0, ix, body.y, TEXT_DIM);
+        for cpu in 0..crate::sched::online_cpus() {
+            let (_wakes, idle) = crate::arch::irq::wake_stats(cpu);
+            let busy = 100u32.saturating_sub(idle);
+            let y = body.y + 22 + cpu as i32 * 14;
+            let label = format!("{cpu}");
+            fonts.mono.draw(s, &label, 12.0, ix + 4, y - 4, TEXT_DIM);
+            s.fill_rect(ix + 20, y, iw - 20, 6, SURFACE_HI);
+            s.fill_rect(ix + 20, y, ((iw - 20) * busy as i32 / 100).max(2), 6, ACCENT);
+        }
 
         // HEAP bar-meter.
         fonts.ui_medium.draw(s, "Heap", 13.0, body.x, body.y, TEXT_DIM);
@@ -148,5 +152,22 @@ impl App for MonitorApp {
         fonts
             .mono
             .draw(s, &ev_txt, 26.0, body.x + col_w - 62, body.y + 178, TEXT);
+
+        // Thread table.
+        let ty = body.y + 232;
+        fonts.ui_medium.draw(s, "Threads", 13.0, body.x, ty, TEXT_DIM);
+        for (row, t) in crate::sched::snapshot().into_iter().take(8).enumerate() {
+            let line = format!(
+                "{:>3} {:<8} {:<8} cpu{} {:?}",
+                t.id,
+                &t.name[..t.name.len().min(8)],
+                format!("{:?}", t.state),
+                t.cpu,
+                t.class
+            );
+            fonts
+                .mono
+                .draw(s, &line, 13.0, body.x, ty + 20 + row as i32 * 17, TEXT);
+        }
     }
 }
