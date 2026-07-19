@@ -31,21 +31,50 @@ pub struct Console {
     ch: Channel,
     cols: u32,
     rows: u32,
+    /// Output buffer: `write_str` fragments (padding, args) accumulate here
+    /// and flush per line, so one `println!` is one channel message instead
+    /// of one per format fragment — a padded `ps` row is ~30 write_str calls
+    /// and the channel caps at 64 messages, so unbuffered it truncated
+    /// mid-row. Flushed on newline, on overflow, and before reading input.
+    out: Vec<u8>,
 }
+
+const FLUSH_AT: usize = 8192;
 
 impl Console {
     pub fn new(ch: Channel) -> Self {
-        Self { ch, cols: 0, rows: 0 }
+        Self { ch, cols: 0, rows: 0, out: Vec::new() }
     }
 
-    pub fn write_bytes(&self, s: &[u8]) {
+    /// Buffer bytes for output; complete lines flush automatically.
+    pub fn write_bytes(&mut self, s: &[u8]) {
+        self.out.extend_from_slice(s);
+        if self.out.len() >= FLUSH_AT || self.out.contains(&b'\n') {
+            self.flush();
+        }
+    }
+
+    /// Send any buffered output now, coalesced into as few messages as the
+    /// channel byte cap allows. Call before blocking for input so an
+    /// unterminated prompt is visible.
+    pub fn flush(&mut self) {
+        if self.out.is_empty() {
+            return;
+        }
+        // Channel cap is 64 KiB/msg; stay well under with the opcode header.
+        const CHUNK: usize = 32 * 1024;
+        let out = core::mem::take(&mut self.out);
+        for part in out.chunks(CHUNK) {
+            self.send_chunk(part);
+        }
+    }
+
+    fn send_chunk(&self, s: &[u8]) {
         let mut msg = Vec::with_capacity(4 + s.len());
         msg.extend_from_slice(&OP_WRITE.to_le_bytes());
         msg.extend_from_slice(s);
-        // The console channel is bounded (64 msgs / 64 KiB): a burst of
-        // output (e.g. `ps`) fills it faster than the terminal drains on its
-        // frame clock. Block on WRITABLE and retry rather than dropping the
-        // rest of the line — the terminal's pump frees space and wakes us.
+        // Bounded channel: block on WRITABLE and retry rather than dropping
+        // (the terminal's pump frees space and wakes us).
         loop {
             match self.ch.send(&msg, &[]) {
                 Ok(()) => return,
@@ -78,6 +107,7 @@ impl Console {
 
     /// Block for the next console event. `None` means the terminal went away.
     pub fn next_event(&mut self) -> Option<ConsoleEvent> {
+        self.flush(); // make any pending output (e.g. a prompt) visible first
         loop {
             let msg = self.ch.recv().ok()?;
             if let Some(ev) = decode(&msg) {
