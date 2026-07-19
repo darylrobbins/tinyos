@@ -590,7 +590,8 @@ impl Shell {
     /// Drain `edit <file>` requests queued by any Terminal window and open an
     /// editor window for each. Called once per frame from the main loop.
     pub fn pump_app_requests(&mut self) {
-        let mut reqs = alloc::vec::Vec::new();
+        let mut edits = alloc::vec::Vec::new();
+        let mut vis = alloc::vec::Vec::new();
         for win in &mut self.windows {
             if let Some(t) = win
                 .app
@@ -598,12 +599,38 @@ impl Shell {
                 .downcast_mut::<crate::apps::terminal::TerminalApp>()
             {
                 if let Some(r) = t.take_pending_edit() {
-                    reqs.push(r);
+                    edits.push(r);
+                }
+                if let Some(r) = t.take_pending_vi() {
+                    vis.push(r);
                 }
             }
         }
-        for (cwd, path) in reqs {
+        for (cwd, path) in edits {
             self.open(Box::new(crate::apps::editor::EditorApp::open(cwd, path)));
+        }
+        for (cwd, path) in vis {
+            self.open(Box::new(crate::apps::vi::ViApp::open(cwd, path)));
+        }
+        // Close any vi window that requested `:q` / `:wq`.
+        let mut i = 0;
+        let mut closed = false;
+        while i < self.windows.len() {
+            let close = self.windows[i]
+                .app
+                .as_any()
+                .downcast_mut::<crate::apps::vi::ViApp>()
+                .map(|v| v.wants_close())
+                .unwrap_or(false);
+            if close {
+                self.windows.remove(i);
+                closed = true;
+            } else {
+                i += 1;
+            }
+        }
+        if closed {
+            self.focus = self.windows.len().saturating_sub(1);
         }
     }
 

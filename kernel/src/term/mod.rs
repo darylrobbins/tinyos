@@ -37,6 +37,8 @@ pub struct Terminal {
     /// An `edit <file>` request for the shell to open an editor window,
     /// as (cwd, path). Drained each frame by `Shell::pump_app_requests`.
     pending_edit: Option<(String, String)>,
+    /// A `vi <file>` request for the shell to open a vi window, as (cwd, path).
+    pending_vi: Option<(String, String)>,
 }
 
 struct RunningApp {
@@ -56,6 +58,7 @@ impl Terminal {
             cwd: "/".to_string(),
             running: None,
             pending_edit: None,
+            pending_vi: None,
         };
         t.refresh_prompt();
         t.out(format!("tinyOS {VERSION} - type 'help' to get started"), DIM);
@@ -70,6 +73,11 @@ impl Terminal {
     /// Take a pending `edit <file>` request, if any (shell drains this).
     pub fn take_pending_edit(&mut self) -> Option<(String, String)> {
         self.pending_edit.take()
+    }
+
+    /// Take a pending `vi <file>` request, if any (shell drains this).
+    pub fn take_pending_vi(&mut self) -> Option<(String, String)> {
+        self.pending_vi.take()
     }
 
     /// Prompt path segment, spaces included (" / ", " /notes ").
@@ -157,6 +165,7 @@ impl Terminal {
                     ("ls [path]", "list directory"),
                     ("cat <file>", "print file contents"),
                     ("edit <file>", "edit a file in a new window"),
+                    ("vi <file>", "edit a file with the vi editor"),
                     ("write <file> <text>", "write text to a file"),
                     ("append <file> <text>", "append text to a file"),
                     ("touch <file>", "create an empty file"),
@@ -278,6 +287,14 @@ impl Terminal {
                     self.out("usage: edit <file>".to_string(), ERR);
                 } else {
                     self.pending_edit = Some((self.cwd.clone(), p.to_string()));
+                }
+            }
+            "vi" => {
+                let p = rest.trim();
+                if p.is_empty() {
+                    self.out("usage: vi <file>".to_string(), ERR);
+                } else {
+                    self.pending_vi = Some((self.cwd.clone(), p.to_string()));
                 }
             }
             "write" | "append" => match rest.trim().split_once(' ') {

@@ -196,6 +196,13 @@ impl Editor {
     pub fn status(&self) -> &str {
         &self.status
     }
+    pub fn set_status(&mut self, s: String) {
+        self.status = s;
+    }
+    /// The buffer serialized for saving (trailing newline included).
+    pub fn text(&self) -> String {
+        self.buf.to_string()
+    }
     /// The command/search line being typed, including its `:` / `/` / `?` prefix.
     pub fn command_line(&self) -> Option<String> {
         match self.mode {
