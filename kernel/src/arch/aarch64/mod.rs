@@ -73,3 +73,11 @@ pub fn park() -> ! {
         unsafe { asm!("wfe") };
     }
 }
+
+pub fn poweroff() -> ! {
+    smp::system_off()
+}
+
+pub fn reboot() -> ! {
+    smp::system_reset()
+}

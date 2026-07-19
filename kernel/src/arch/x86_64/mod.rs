@@ -58,3 +58,15 @@ pub fn park() -> ! {
         unsafe { asm!("hlt") };
     }
 }
+
+/// ACPI S5 on QEMU q35: SLP_EN with SLP_TYP 0 to the ICH9 PM1a control port.
+pub fn poweroff() -> ! {
+    io::outw(0x604, 0x2000);
+    park() // unreachable on QEMU
+}
+
+/// Full reset via the ICH reset-control register.
+pub fn reboot() -> ! {
+    io::outb(0xCF9, 0x06);
+    park()
+}

@@ -32,7 +32,8 @@ interrupt-driven, no processes (yet), no problems.
 - Shell built-ins: `help`, `echo`, `clear`, `sysinfo`, `memstat`, `uptime`,
   `date`, `spin`, `ps`, `kill`, `about` (and one you'll find on your own),
   plus files: `ls`, `cat`, `write`, `append`, `mkdir`, `rm`, `mv`, `cd`,
-  `pwd`, `fsinfo`.
+  `pwd`, `fsinfo` — and `shutdown` / `reboot` (sync the disk, then PSCI
+  SYSTEM_OFF/RESET on arm64, ACPI S5 / reset port on x86_64).
 
 | | |
 |---|---|

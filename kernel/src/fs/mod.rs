@@ -107,6 +107,14 @@ pub fn rename(cwd: &str, from: &str, to: &str) -> Result<(), FsError> {
     with_fs(|fs| fs.rename(cwd, from, to))
 }
 
+/// Flush the device write cache; Ok(()) when running diskless.
+pub fn sync() -> Result<(), FsError> {
+    match FS.lock().as_mut() {
+        Some(fs) => fs.sync(),
+        None => Ok(()),
+    }
+}
+
 pub fn stats() -> Result<FsStats, FsError> {
     with_fs(|fs| Ok(fs.stats()))
 }

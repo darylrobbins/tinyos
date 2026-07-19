@@ -166,6 +166,8 @@ impl Terminal {
                     ("cd [dir]", "change directory"),
                     ("pwd", "print working directory"),
                     ("fsinfo", "filesystem usage"),
+                    ("shutdown", "sync disk and power off"),
+                    ("reboot", "sync disk and restart"),
                     ("about", "about tinyOS"),
                 ] {
                     self.out(format!("  {c:<22} {d}"), FG);
@@ -326,6 +328,19 @@ impl Terminal {
                     }
                 }
                 Err(e) => self.out(format!("fsinfo: {e}"), ERR),
+            },
+            "shutdown" | "poweroff" | "halt" | "reboot" => match crate::fs::sync() {
+                Ok(()) => {
+                    kprintln!("tinyos: {name}: filesystem synced, going down");
+                    if name == "reboot" {
+                        crate::arch::reboot()
+                    } else {
+                        crate::arch::poweroff()
+                    }
+                }
+                // A failed sync is the one case where powering off could
+                // lose the device cache: refuse and leave the OS running.
+                Err(e) => self.out(format!("{name}: sync failed ({e}), aborting"), ERR),
             },
             "sudo" => self.out(
                 "daryl is not in the sudoers file. This incident will be reported.".to_string(),

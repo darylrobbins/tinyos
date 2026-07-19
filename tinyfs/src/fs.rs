@@ -307,6 +307,13 @@ impl<D: BlockDevice> Tinyfs<D> {
         self.commit()
     }
 
+    /// Push everything down to durable storage. Every mutating op already
+    /// commits (with flushes) before returning, so this is a belt-and-braces
+    /// device-cache flush for shutdown paths.
+    pub fn sync(&mut self) -> Result<(), FsError> {
+        self.dev.flush()
+    }
+
     pub fn stats(&self) -> FsStats {
         let used = self
             .bitmap
