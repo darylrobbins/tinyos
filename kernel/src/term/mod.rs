@@ -217,6 +217,12 @@ impl Terminal {
                 Err(_) => self.out("usage: kill <id>".to_string(), ERR),
             },
             "usertest" => self.usertest(rest.trim()),
+            "objtest" => {
+                for line in crate::obj::objtest::run() {
+                    let color = if line.starts_with("PASS") { FG } else { ERR };
+                    self.out(line, color);
+                }
+            }
             "sudo" => self.out(
                 "daryl is not in the sudoers file. This incident will be reported.".to_string(),
                 ERR,

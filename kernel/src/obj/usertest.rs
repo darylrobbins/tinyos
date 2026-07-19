@@ -88,6 +88,11 @@ pub fn boot_hook() {
             }
             Err(e) => kprintln!("tinyos: boottest FAILED: {e}"),
         },
+        Some("obj") => {
+            for line in super::objtest::run() {
+                kprintln!("tinyos: objtest {line}");
+            }
+        }
         _ => {}
     }
 }

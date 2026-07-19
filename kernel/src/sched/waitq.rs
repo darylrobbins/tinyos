@@ -17,6 +17,11 @@ pub struct WaitQueue {
 pub static INPUT: WaitQueue = WaitQueue::new();
 /// Generic timed sleeps (`sched::sleep_us`).
 pub static TIMER: WaitQueue = WaitQueue::new();
+/// Kernel-object state changes (channel send/close, process exit). One
+/// global queue: every waiter re-evaluates its signal set on wake —
+/// thundering-herd-but-correct; per-object queues are a later optimization
+/// invisible to the ABI.
+pub static OBJECTS: WaitQueue = WaitQueue::new();
 
 impl WaitQueue {
     pub const fn new() -> Self {
@@ -84,8 +89,12 @@ pub(super) fn drain(now_us: u64) {
     }
     INPUT.wake_expired(now_us);
     TIMER.wake_expired(now_us);
+    OBJECTS.wake_expired(now_us);
 }
 
 pub(super) fn earliest_deadline() -> u64 {
-    INPUT.earliest_deadline().min(TIMER.earliest_deadline())
+    INPUT
+        .earliest_deadline()
+        .min(TIMER.earliest_deadline())
+        .min(OBJECTS.earliest_deadline())
 }
