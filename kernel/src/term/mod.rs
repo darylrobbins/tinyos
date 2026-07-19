@@ -159,6 +159,7 @@ impl Terminal {
                     ("edit <file>", "edit a file in a new window"),
                     ("write <file> <text>", "write text to a file"),
                     ("append <file> <text>", "append text to a file"),
+                    ("touch <file>", "create an empty file"),
                     ("mkdir <dir>", "create a directory"),
                     ("rm [-r] <path>", "remove a file or directory"),
                     ("mv <from> <to>", "move or rename"),
@@ -289,6 +290,23 @@ impl Terminal {
                 }
                 None => self.out(format!("usage: {name} <file> <text>"), ERR),
             },
+            "touch" => {
+                let path = rest.trim();
+                if path.is_empty() {
+                    self.out("usage: touch <file>".to_string(), ERR);
+                } else {
+                    // Create if absent; leave an existing file or directory be.
+                    match crate::fs::read(&self.cwd, path) {
+                        Ok(_) | Err(tinyfs::FsError::IsADir) => {}
+                        Err(tinyfs::FsError::NotFound) => {
+                            if let Err(e) = crate::fs::write(&self.cwd, path, &[], false) {
+                                self.out(format!("touch: {e}"), ERR);
+                            }
+                        }
+                        Err(e) => self.out(format!("touch: {e}"), ERR),
+                    }
+                }
+            }
             "mkdir" => match crate::fs::mkdir(&self.cwd, rest.trim()) {
                 Ok(()) => {}
                 Err(e) => self.out(format!("mkdir: {e}"), ERR),
