@@ -67,6 +67,10 @@ struct RunningApp {
     input_mode: u32,
     /// Last (cols, rows) sent as OP_RESIZE; (0, 0) forces the initial send.
     sent_size: (usize, usize),
+    /// The shell's current foreground child thread (0 = none), reported via
+    /// OP_SET_FOREGROUND. Ctrl+C kills this so a hung child dies but the
+    /// shell survives.
+    foreground_tid: u32,
     /// Full-screen text surface, when the app has one open.
     surface: Option<AppSurface>,
     /// Bottom-pinned live region (lines keep scrolling above it). Mutually
@@ -253,6 +257,31 @@ impl Terminal {
             keys::LEFT => self.view.left(),
             keys::RIGHT => self.view.right(),
             _ => {}
+        }
+    }
+
+    /// Ctrl+C: interrupt. Kills the shell's hung foreground child if one is
+    /// registered (the shell survives and re-prompts); in the fallback
+    /// interpreter it kills the directly-run app; at a bare shell prompt it
+    /// just cancels the current input line.
+    pub fn on_ctrl_key(&mut self, code: u16) {
+        if code != abi::keys::KEY_C {
+            return;
+        }
+        let (fg_tid, thread_id) = match &self.running {
+            Some(a) => (a.foreground_tid, a.thread_id),
+            None => return,
+        };
+        if fg_tid != 0 {
+            crate::sched::kill(fg_tid);
+            self.out("^C".to_string(), DIM);
+        } else if self.shell_session {
+            // Bare shell prompt: cancel the typed line, keep the shell.
+            self.out("^C".to_string(), DIM);
+            self.view.set_active(String::new());
+        } else {
+            crate::sched::kill(thread_id);
+            self.out("^C".to_string(), DIM);
         }
     }
 
@@ -680,6 +709,7 @@ impl Terminal {
             prompt_spans: Vec::new(),
             input_mode: abi::console::INPUT_MODE_LINES,
             sent_size: (0, 0), // forces the initial OP_RESIZE
+            foreground_tid: 0,
             surface: None,
             live: None,
         };
@@ -842,6 +872,18 @@ impl Terminal {
                     // the console, which missed the one-shot startup Resize.
                     // Re-arm it so the app learns the terminal dimensions.
                     app.sent_size = (0, 0);
+                    // LINES mode and a full-screen surface are mutually
+                    // exclusive. A shell returns to LINES after each child, so
+                    // this tears down a surface a crashed/killed child left
+                    // behind (it never sent SURFACE_CLOSE) — self-healing.
+                    if app.input_mode == INPUT_MODE_LINES {
+                        app.surface = None;
+                        app.live = None;
+                    }
+                }
+                OP_SET_FOREGROUND if msg.bytes.len() >= 8 => {
+                    app.foreground_tid =
+                        u32::from_le_bytes(msg.bytes[4..8].try_into().unwrap());
                 }
                 OP_SURFACE_OPEN if msg.bytes.len() >= 12 => {
                     let scols = u32::from_le_bytes(msg.bytes[4..8].try_into().unwrap()) as usize;

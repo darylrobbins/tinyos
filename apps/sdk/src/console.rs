@@ -106,6 +106,15 @@ impl Console {
         self.send_raw(&msg);
     }
 
+    /// Tell the terminal which child thread is in the foreground (0 = none),
+    /// so Ctrl+C can kill a hung child instead of this process.
+    pub fn set_foreground(&mut self, tid: u32) {
+        self.flush();
+        let mut msg = OP_SET_FOREGROUND.to_le_bytes().to_vec();
+        msg.extend_from_slice(&tid.to_le_bytes());
+        self.send_raw(&msg);
+    }
+
     /// Clear the terminal scrollback.
     pub fn clear(&mut self) {
         self.flush();

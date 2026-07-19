@@ -105,9 +105,16 @@ impl Shell {
                     out(DIM, &format!("[{}] {name} &", child.thread_id));
                     self.jobs.push(Job { name: name.to_string(), child });
                 } else {
-                    child.wait();
-                    // A surface/raw-key child may have left KEYS mode; restore.
+                    // Register as the foreground child so the terminal's
+                    // Ctrl+C kills it (not us) if it hangs.
                     if let Some(c) = entry::console() {
+                        c.set_foreground(child.thread_id);
+                    }
+                    child.wait();
+                    // Clear the foreground registration and restore LINES mode
+                    // (also tears down any surface a crashed child left behind).
+                    if let Some(c) = entry::console() {
+                        c.set_foreground(0);
                         c.set_input_mode(INPUT_MODE_LINES);
                     }
                 }

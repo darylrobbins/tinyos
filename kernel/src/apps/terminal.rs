@@ -57,4 +57,8 @@ impl App for TerminalApp {
     fn on_key(&mut self, code: u16) {
         self.term.on_key(code);
     }
+
+    fn on_ctrl_key(&mut self, code: u16) {
+        self.term.on_ctrl_key(code);
+    }
 }
