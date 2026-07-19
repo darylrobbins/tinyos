@@ -100,6 +100,15 @@ fn kmain(mut fb: FbInfo, memory_map: MemoryMapOwned) -> ! {
     let heap_bytes = mem::init_heap(&memory_map);
     kprintln!("tinyos: heap {} MiB", heap_bytes / (1024 * 1024));
 
+    #[cfg(target_arch = "aarch64")]
+    {
+        arch::paging::init_cpu();
+        kprintln!(
+            "tinyos: user paging (ttbr1) {}",
+            if arch::paging::self_test() { "ok" } else { "FAILED" }
+        );
+    }
+
     // Upgrade the display: re-point ramfb at our own, larger framebuffer.
     // (edk2's GOP tops out at 1024x768; ramfb itself has no such limit.)
     let (rw, rh) = drivers::fwcfg::read_str("opt/tinyos/res")

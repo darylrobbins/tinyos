@@ -29,6 +29,7 @@ struct ApBoot {
     tcr: u64,       // 0x18
     sctlr: u64,     // 0x20
     cpu: u64,       // 0x28
+    ttbr1: u64,     // 0x30 (null user table; TCR is snapshotted with EPD1=0)
 }
 
 static AP_ONLINE: AtomicU32 = AtomicU32::new(0);
@@ -60,6 +61,8 @@ ap_entry:
     msr cpacr_el1, x1
     ldr x1, [x0, #0x08]
     msr ttbr0_el1, x1
+    ldr x1, [x0, #0x30]
+    msr ttbr1_el1, x1
     ldr x1, [x0, #0x10]
     msr mair_el1, x1
     ldr x1, [x0, #0x18]
@@ -84,7 +87,10 @@ extern "C" fn ap_main(boot: &'static ApBoot) -> ! {
     super::exceptions::install();
     super::gic::init_cpu(cpu);
     AP_ONLINE.fetch_add(1, Ordering::Release);
-    kprintln!("tinyos: cpu{cpu} online");
+    kprintln!(
+        "tinyos: cpu{cpu} online (user paging {})",
+        if super::paging::self_test() { "ok" } else { "FAILED" }
+    );
     crate::sched::ap_enter(cpu)
 }
 
@@ -117,6 +123,7 @@ pub fn start_secondary_cpus() {
             tcr: read_sysreg!("tcr_el1"),
             sctlr: read_sysreg!("sctlr_el1"),
             cpu: cpu as u64,
+            ttbr1: super::paging::null_ttbr1(),
         }));
         clean_dcache(boot as *const ApBoot as usize, core::mem::size_of::<ApBoot>());
         clean_dcache(ap_entry as usize, 128);

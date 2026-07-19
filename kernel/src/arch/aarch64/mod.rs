@@ -2,6 +2,7 @@ pub mod context;
 pub mod exceptions;
 pub mod gic;
 pub mod irq;
+pub mod paging;
 pub mod smp;
 pub mod timer;
 

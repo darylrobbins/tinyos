@@ -1,3 +1,5 @@
+pub mod frames;
+
 use linked_list_allocator::LockedHeap;
 use uefi::boot::MemoryType;
 use uefi::mem::memory_map::{MemoryMap, MemoryMapOwned};
