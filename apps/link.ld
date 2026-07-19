@@ -10,6 +10,7 @@ SECTIONS
 
     .abi : ALIGN(8) {
         KEEP(*(.tinyos_abi))
+        KEEP(*(.tinyos_abi.caps))
     }
 
     .text : ALIGN(4096) {

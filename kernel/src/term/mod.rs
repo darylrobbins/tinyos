@@ -602,7 +602,12 @@ impl Terminal {
                     return;
                 }
             };
-            match crate::obj::loader::spawn(name.to_string(), &elf, &argv) {
+            match crate::obj::loader::spawn(
+                name.to_string(),
+                &elf,
+                &argv,
+                &crate::obj::loader::GrantSet::all(),
+            ) {
                 Ok(app) => {
                     self.out(format!("run: started {name} (thread {})", app.thread_id), DIM);
                     // Hand the window channel to the shell: if the app opens a

@@ -360,7 +360,7 @@ fn sys_process_spawn(
     const MAX_ELF: usize = 16 * 1024 * 1024;
     const MAX_ARGV: u64 = 4096;
     const MAX_ARGS: u32 = 16;
-    const MAX_GRANTS: u64 = 4;
+    const MAX_GRANTS: u64 = 8;
     if argv_len > MAX_ARGV || grant_count > MAX_GRANTS {
         return Err(ST_INVALID_ARGS);
     }

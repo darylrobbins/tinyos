@@ -33,10 +33,37 @@ pub use console::{read_line, ConsoleEvent, LiveRegion, TextSurface};
 pub use entry::Env;
 
 /// ABI version stamp placed in the `.tinyos_abi` section; the loader checks
-/// it before running the app.
+/// it before running the app. `declare_caps!` appends a caps blob right
+/// after it (section `.tinyos_abi.caps`, ordered by link.ld).
 #[used]
 #[link_section = ".tinyos_abi"]
 static ABI_VERSION: u32 = syscall::ABI_VERSION;
+
+/// Backing for `declare_caps!`: u32 len + token bytes, placed immediately
+/// after the ABI stamp so the loader reads it at image base + 4.
+#[repr(C)]
+pub struct CapsBlob<const N: usize> {
+    pub len: u32,
+    pub bytes: [u8; N],
+}
+
+/// Declare the capabilities this app needs, newline-separated:
+/// `console`, `window`, `proc`, `proc.kill` (advisory), `fs:self`
+/// (a private data dir), `fs:/shared/<dir>`. Spawners intersect these with
+/// their own policy; apps that declare nothing get the legacy default.
+///
+/// ```ignore
+/// tinyos_app::declare_caps!(b"console\nwindow\nfs:self");
+/// ```
+#[macro_export]
+macro_rules! declare_caps {
+    ($caps:expr) => {
+        #[used]
+        #[link_section = ".tinyos_abi.caps"]
+        static TINYOS_CAPS: $crate::CapsBlob<{ $caps.len() }> =
+            $crate::CapsBlob { len: $caps.len() as u32, bytes: *$caps };
+    };
+}
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
