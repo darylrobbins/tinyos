@@ -37,6 +37,8 @@ impl Object {
 /// Wake every object-waiter to re-evaluate its signal set. Thread context
 /// only (all object state changes happen in syscalls or kernel threads).
 pub fn wake_objects() {
+    use core::sync::atomic::Ordering;
+    crate::sched::waitq::OBJ_SEQ.fetch_add(1, Ordering::SeqCst);
     crate::sched::waitq::OBJECTS.wake_all();
 }
 
@@ -46,6 +48,10 @@ pub fn wake_objects() {
 pub fn wait_many(sets: &mut [(Object, u32, u32)], deadline_us: u64) -> u32 {
     use syscall::{ST_KILLED, ST_OK, ST_TIMED_OUT};
     loop {
+        // Record the wake sequence BEFORE checking signals: if a wake fires
+        // after this point, enqueue_waiter sees the stale value and refuses
+        // to sleep — no poll cap needed.
+        let seq = crate::sched::waitq::OBJ_SEQ.load(core::sync::atomic::Ordering::SeqCst);
         let mut hit = false;
         for (obj, want, observed) in sets.iter_mut() {
             *observed = obj.signals();
@@ -59,13 +65,12 @@ pub fn wait_many(sets: &mut [(Object, u32, u32)], deadline_us: u64) -> u32 {
         if crate::arch::timer::uptime_us() >= deadline_us {
             return ST_TIMED_OUT;
         }
-        if crate::sched::current().kill_pending.load(core::sync::atomic::Ordering::Acquire) {
+        let me = crate::sched::current();
+        if me.kill_pending.load(core::sync::atomic::Ordering::Acquire) {
             return ST_KILLED;
         }
-        // A wake between the check above and the enqueue (which happens
-        // after the context save) would be lost; cap the block so the loop
-        // re-evaluates. Kills are exempt: wake_expired force-wakes them.
-        let cap = crate::arch::timer::uptime_us() + 100_000;
-        crate::sched::waitq::OBJECTS.block_current(deadline_us.min(cap));
+        me.wait_seq
+            .store(seq, core::sync::atomic::Ordering::Release);
+        crate::sched::waitq::OBJECTS.block_current(deadline_us);
     }
 }

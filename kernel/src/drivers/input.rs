@@ -46,14 +46,14 @@ impl Input {
             Some(v) => {
                 kprintln!("tinyos: virtio-input ready (bdf {:#x})", dev.bdf);
                 // Register the ISR byte so the IRQ handler can
-                // deassert level-triggered INTx.
-                let slot = &crate::arch::irq::INPUT_ISR_ADDRS[self.devices.len()];
-                slot.store(v.isr_addr(), core::sync::atomic::Ordering::Relaxed);
+                // deassert level-triggered INTx (slot claimed by CAS —
+                // blk shares the same table).
+                let Some(_idx) = crate::arch::irq::claim_isr_slot(v.isr_addr()) else {
+                    kprintln!("tinyos: no free ISR slot for input device");
+                    return;
+                };
                 #[cfg(target_arch = "x86_64")]
-                crate::arch::irq::register_input_gsi(
-                    self.devices.len(),
-                    dev.interrupt_line() as u32,
-                );
+                crate::arch::irq::register_input_gsi(_idx, dev.interrupt_line() as u32);
                 self.devices.push(v);
             }
             None => kprintln!("tinyos: virtio-input init FAILED (bdf {:#x})", dev.bdf),

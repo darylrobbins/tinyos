@@ -42,6 +42,9 @@ pub struct Thread {
     pub last_cpu: AtomicU8,
     /// For blocked threads: absolute wake deadline in µs (u64::MAX = none).
     pub wake_deadline: AtomicU64,
+    /// Object-wait handshake: the OBJ_SEQ value observed before blocking
+    /// (u64::MAX = not an object waiter). See waitq::enqueue_waiter.
+    pub wait_seq: AtomicU64,
     ctx: UnsafeCell<Context>,
     _stack: Option<Box<[u8]>>, // None for adopted boot/AP stacks
     /// The userspace seam: a user thread carries its address space (shared
@@ -87,6 +90,7 @@ impl Thread {
             kill_pending: AtomicBool::new(false),
             last_cpu: AtomicU8::new(0),
             wake_deadline: AtomicU64::new(u64::MAX),
+            wait_seq: AtomicU64::new(u64::MAX),
             ctx: UnsafeCell::new(Context::new(top, entry)),
             _stack: Some(stack),
             aspace: None,
@@ -129,6 +133,7 @@ impl Thread {
             kill_pending: AtomicBool::new(false),
             last_cpu: AtomicU8::new(0),
             wake_deadline: AtomicU64::new(u64::MAX),
+            wait_seq: AtomicU64::new(u64::MAX),
             ctx: UnsafeCell::new(Context::empty()),
             _stack: None,
             aspace: None,

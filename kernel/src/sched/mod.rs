@@ -290,7 +290,15 @@ fn idle_loop(cpu: usize) -> ! {
 
 /// BSP entry: adopt the boot stack as CPU 0's idle thread, spawn the UI
 /// thread, and start scheduling. Never returns.
+/// True once the scheduler is running on the boot CPU (threads may block).
+pub fn started() -> bool {
+    STARTED.load(core::sync::atomic::Ordering::Acquire)
+}
+
+static STARTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 pub fn start(ui_main: fn()) -> ! {
+    STARTED.store(true, core::sync::atomic::Ordering::Release);
     let cpu = cpu_id();
     let idle = Arc::new(Thread::adopt_current(0, alloc::format!("idle{cpu}"), 1 << cpu));
     THREADS.lock().push(idle.clone());

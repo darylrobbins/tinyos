@@ -241,6 +241,12 @@ impl Queue {
         mmio_w16(self.notify_addr, 0);
     }
 
+    /// True if a completed buffer is waiting (non-consuming).
+    pub fn peek_used(&self) -> Option<()> {
+        fence();
+        (mmio_r16(self.used + 2) != self.last_used).then_some(())
+    }
+
     /// Next completed buffer, if any: (descriptor id, written length).
     pub fn poll_used(&mut self) -> Option<(u16, u32)> {
         fence();

@@ -30,10 +30,32 @@ pub struct VirtioBlk {
     has_flush: bool,
 }
 
+/// Spin briefly (fast virtio completions are µs-scale), then block on the
+/// INPUT wait queue — the blk INTx sets WAKE_INPUT like the input devices,
+/// so completion wakes us. Pre-scheduler (mount at boot) it just spins.
+fn wait_used(queue: &Queue) {
+    let t0 = crate::arch::timer::uptime_us();
+    while queue.peek_used().is_none() {
+        if crate::sched::started() && crate::arch::timer::uptime_us() - t0 > 200 {
+            let dl = crate::arch::timer::uptime_us() + 1_000;
+            crate::sched::waitq::INPUT.block_current(dl);
+        } else {
+            core::hint::spin_loop();
+        }
+    }
+}
+
 impl VirtioBlk {
     pub fn init(pci: &PciDevice, alloc: &mut BarAllocator) -> Option<Self> {
         let transport = Transport::init(pci, alloc, FEATURE_FLUSH)?;
-        pci.disable_intx();
+        // Completion IRQs ride the shared PCI INTx path: register the ISR
+        // byte (read = deassert) in a free slot; the handler sets
+        // WAKE_INPUT, which wakes any blocked requester below.
+        let _idx = crate::arch::irq::claim_isr_slot(transport.isr_addr());
+        #[cfg(target_arch = "x86_64")]
+        if let Some(idx) = _idx {
+            crate::arch::irq::register_input_gsi(idx, pci.interrupt_line() as u32);
+        }
         let queue = transport.setup_queue(0, 8, IO_SIZE + 16 + 1);
         transport.driver_ok();
 
@@ -84,9 +106,8 @@ impl VirtioBlk {
         self.queue.push_avail(0);
         self.queue.notify();
 
-        while self.queue.poll_used().is_none() {
-            core::hint::spin_loop();
-        }
+        wait_used(&self.queue);
+        let _ = self.queue.poll_used();
         unsafe { core::ptr::read_volatile((base + STATUS_OFF) as *const u8) == 0 }
     }
 

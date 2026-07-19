@@ -4,7 +4,7 @@
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use spin::Mutex;
 
@@ -22,6 +22,14 @@ pub static TIMER: WaitQueue = WaitQueue::new();
 /// thundering-herd-but-correct; per-object queues are a later optimization
 /// invisible to the ABI.
 pub static OBJECTS: WaitQueue = WaitQueue::new();
+
+/// Object-wake sequence number: wake_objects() bumps it BEFORE waking, and
+/// an object waiter records it before re-checking signals. If the recorded
+/// value is stale by the time the (post-context-save) enqueue happens, a
+/// wake ran in the window — the waiter is made ready instead of enqueued.
+/// This closes the lost-wakeup race that previously needed a 100 ms
+/// poll cap in wait_many.
+pub static OBJ_SEQ: AtomicU64 = AtomicU64::new(0);
 
 impl WaitQueue {
     pub const fn new() -> Self {
@@ -44,6 +52,15 @@ impl WaitQueue {
     }
 
     pub(super) fn enqueue_waiter(&self, t: Arc<Thread>) {
+        let seq = t.wait_seq.swap(u64::MAX, Ordering::AcqRel);
+        if seq != u64::MAX && OBJ_SEQ.load(Ordering::SeqCst) != seq {
+            // A wake happened between the signal check and this enqueue:
+            // don't sleep on it, run again immediately.
+            t.wake_deadline.store(u64::MAX, Ordering::Release);
+            t.set_state(State::Ready);
+            super::READY.lock().push_back(t);
+            return;
+        }
         self.waiters.lock().push(t);
     }
 

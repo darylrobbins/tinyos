@@ -20,6 +20,27 @@ static LAST_IDLE_PCT: [AtomicU32; N] = [const { AtomicU32::new(0) }; N];
 /// input driver; the IRQ handler reads each to deassert INTx.
 pub static INPUT_ISR_ADDRS: [AtomicUsize; 8] = [const { AtomicUsize::new(0) }; 8];
 
+/// Claim a free ISR slot (CAS) for a level-triggered INTx source; the IRQ
+/// handler reads every registered ISR byte to deassert. Returns the slot
+/// index. Devices must never index slots directly — claim order follows
+/// PCI scan order, which is not fixed.
+pub fn claim_isr_slot(isr_addr: usize) -> Option<usize> {
+    for (i, slot) in INPUT_ISR_ADDRS.iter().enumerate() {
+        if slot
+            .compare_exchange(
+                0,
+                isr_addr,
+                core::sync::atomic::Ordering::AcqRel,
+                core::sync::atomic::Ordering::Relaxed,
+            )
+            .is_ok()
+        {
+            return Some(i);
+        }
+    }
+    None
+}
+
 /// PCIe INTA..INTD on the virt board.
 const SPI_PCIE_BASE: u32 = 32 + 3;
 
