@@ -220,6 +220,13 @@ impl Terminal {
                         FG,
                     );
                 }
+                let procs = crate::obj::process::Process::snapshot();
+                if !procs.is_empty() {
+                    self.out("processes:".to_string(), DIM);
+                    for (pid, name, tid) in procs {
+                        self.out(format!("{pid:>4}  {name:<8} thread {tid}"), FG);
+                    }
+                }
             }
             "kill" => match rest.trim().parse::<u32>() {
                 Ok(id) if id == sched::ui_thread_id() => {
