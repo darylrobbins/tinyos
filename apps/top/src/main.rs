@@ -141,3 +141,4 @@ fn main(_env: Env) -> i32 {
 }
 
 app!(main);
+tinyos_app::declare_caps!(b"console\nwindow\nproc");

@@ -55,6 +55,88 @@ fn u64at(b: &[u8], o: usize) -> Option<u64> {
     rd::<8>(b, o).map(u64::from_le_bytes)
 }
 
+/// File bytes of the lowest PT_LOAD segment (where link.ld places the
+/// `.tinyos_abi` stamp: u32 abi_version, then optionally u32 caps_len +
+/// caps bytes emitted by the SDK's `declare_caps!`).
+fn abi_blob(elf: &[u8]) -> Option<&[u8]> {
+    let phoff = u64at(elf, 32)? as usize;
+    let phentsize = u16at(elf, 54)? as usize;
+    let phnum = u16at(elf, 56)? as usize;
+    let (_, ph) = (0..phnum)
+        .filter_map(|i| {
+            let ph = phoff + i * phentsize;
+            (u32at(elf, ph) == Some(PT_LOAD)).then_some((u64at(elf, ph + 16)?, ph))
+        })
+        .min_by_key(|(vaddr, _)| *vaddr)?;
+    let off = u64at(elf, ph + 8)? as usize;
+    let filesz = u64at(elf, ph + 32)? as usize;
+    elf.get(off..(off + filesz).min(elf.len()))
+}
+
+/// Sanity cap on the caps blob; anything larger is treated as absent.
+const MAX_CAPS_LEN: usize = 512;
+
+/// Capabilities an app declares in its `.tinyos_abi` stamp. Declarations are
+/// requests: each spawner intersects them with its own policy. An app with no
+/// caps blob (old SDK, or none declared) gets the legacy default so existing
+/// binaries keep running; an app that declares caps gets exactly those.
+pub struct Manifest {
+    pub console: bool,
+    pub window: bool,
+    pub proc: bool,
+    /// Advisory: kill authority is always the spawner's call.
+    pub proc_kill: bool,
+    /// Requested FS subtrees; `"self"` means a spawner-chosen private dir.
+    pub fs: Vec<String>,
+}
+
+impl Manifest {
+    fn legacy() -> Self {
+        Manifest {
+            console: true,
+            window: true,
+            proc: true,
+            proc_kill: false,
+            fs: alloc::vec![String::from("self")],
+        }
+    }
+}
+
+/// Parse the app's declared caps, or the legacy default if none.
+pub fn manifest(elf: &[u8]) -> Manifest {
+    let Some(blob) = abi_blob(elf) else {
+        return Manifest::legacy();
+    };
+    let caps = u32at(blob, 4)
+        .map(|l| l as usize)
+        .filter(|&l| l > 0 && l <= MAX_CAPS_LEN)
+        .and_then(|l| blob.get(8..8 + l))
+        .and_then(|b| core::str::from_utf8(b).ok());
+    let Some(caps) = caps else {
+        return Manifest::legacy();
+    };
+    // Declared caps → default-deny: only what's listed.
+    let mut m = Manifest { console: false, window: false, proc: false, proc_kill: false, fs: Vec::new() };
+    for tok in caps.lines().map(str::trim).filter(|t| !t.is_empty()) {
+        match tok {
+            "console" => m.console = true,
+            "window" => m.window = true,
+            "proc" => m.proc = true,
+            "proc.kill" => {
+                m.proc = true;
+                m.proc_kill = true;
+            }
+            t => {
+                if let Some(path) = t.strip_prefix("fs:") {
+                    m.fs.push(String::from(path));
+                }
+                // Unknown tokens are ignored (they can only under-grant).
+            }
+        }
+    }
+    m
+}
+
 struct Segment {
     off: usize,
     vaddr: u64,
@@ -87,15 +169,8 @@ fn load_image(elf: &[u8], aspace: &mut AddrSpace, abi_expected: u32) -> Result<u
     let phnum = u16at(elf, 56).ok_or(LoadError::BadImage)? as usize;
 
     // The .tinyos_abi stamp is placed first at the image base by link.ld, so
-    // it is the first 4 bytes of the lowest PT_LOAD segment's file data.
-    let abi_seen = (0..phnum)
-        .filter_map(|i| {
-            let ph = phoff + i * phentsize;
-            (u32at(elf, ph) == Some(PT_LOAD)).then_some((u64at(elf, ph + 16)?, ph))
-        })
-        .min_by_key(|(vaddr, _)| *vaddr)
-        .and_then(|(_, ph)| u32at(elf, u64at(elf, ph + 8)? as usize));
-    if let Some(v) = abi_seen {
+    // it is the head of the lowest PT_LOAD segment's file data.
+    if let Some(v) = abi_blob(elf).and_then(|b| u32at(b, 0)) {
         if v != abi_expected {
             return Err(LoadError::BadAbi(v));
         }
@@ -262,24 +337,48 @@ pub fn spawn_with_grants(
     Ok((process, thread_id, main_kern))
 }
 
+/// Which bootstrap channels a spawner actually grants: the app's declared
+/// manifest intersected with the spawner's policy. The kernel ends always
+/// exist (channels are cheap); an ungranted app end is simply dropped, so
+/// the app never receives that tag and the kernel end just reads PEER_CLOSED.
+pub struct GrantSet {
+    pub console: bool,
+    pub window: bool,
+    pub fs: bool,
+    pub proc: bool,
+}
+
+impl GrantSet {
+    /// Developer mode (terminal `run`, tests): everything.
+    pub fn all() -> Self {
+        GrantSet { console: true, window: true, fs: true, proc: true }
+    }
+}
+
 /// Load `elf`, spawn it as a user process named `name` with `argv`, granting
-/// a console and shell channel. Returns the kernel-side ends to pump.
-pub fn spawn(name: String, elf: &[u8], argv: &[String]) -> Result<SpawnedApp, LoadError> {
+/// the channels selected by `grants`. Returns the kernel-side ends to pump.
+pub fn spawn(
+    name: String,
+    elf: &[u8],
+    argv: &[String],
+    grant_set: &GrantSet,
+) -> Result<SpawnedApp, LoadError> {
     let (console_app, console_kern) = channel::create();
     let (shell_app, shell_kern) = channel::create();
     let (fs_app, fs_kern) = channel::create();
     let (proc_app, proc_kern) = channel::create();
-    let (process, thread_id, main_kern) = spawn_with_grants(
-        name,
-        elf,
-        argv,
-        alloc::vec![
-            (TAG_CONSOLE, Handle::new(Object::Channel(console_app), RIGHTS_ALL)),
-            (TAG_SHELL, Handle::new(Object::Channel(shell_app), RIGHTS_ALL)),
-            (TAG_FS, Handle::new(Object::Channel(fs_app), RIGHTS_ALL)),
-            (TAG_PROC, Handle::new(Object::Channel(proc_app), RIGHTS_ALL)),
-        ],
-    )?;
+    let mut grants = Vec::new();
+    for (on, tag, end) in [
+        (grant_set.console, TAG_CONSOLE, console_app),
+        (grant_set.window, TAG_SHELL, shell_app),
+        (grant_set.fs, TAG_FS, fs_app),
+        (grant_set.proc, TAG_PROC, proc_app),
+    ] {
+        if on {
+            grants.push((tag, Handle::new(Object::Channel(end), RIGHTS_ALL)));
+        }
+    }
+    let (process, thread_id, main_kern) = spawn_with_grants(name, elf, argv, grants)?;
     // Park the kernel's bootstrap end in the process so it lives as long as
     // the app does — dropping it would flip the app's main channel to
     // PEER_CLOSED. The kernel never sends on it again.

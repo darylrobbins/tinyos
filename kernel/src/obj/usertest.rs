@@ -144,7 +144,7 @@ pub fn boot_hook() {
             // tells us if the system survives teardown.
             let argv = [alloc::string::String::from("a"), alloc::string::String::from("b")];
             match crate::fs::read("/", "/apps/hello") {
-                Ok(elf) => match super::loader::spawn(alloc::string::String::from("hello"), &elf, &argv) {
+                Ok(elf) => match super::loader::spawn(alloc::string::String::from("hello"), &elf, &argv, &super::loader::GrantSet::all()) {
                     Ok(app) => kprintln!("tinyos: spawnonly thread {}", app.thread_id),
                     Err(e) => kprintln!("tinyos: spawnonly FAILED {}", e.msg()),
                 },
@@ -194,7 +194,7 @@ fn run_hello_once() {
             return;
         }
     };
-    let app = match super::loader::spawn(alloc::string::String::from("hello"), &elf, &argv) {
+    let app = match super::loader::spawn(alloc::string::String::from("hello"), &elf, &argv, &super::loader::GrantSet::all()) {
         Ok(a) => a,
         Err(e) => {
             kprintln!("tinyos: runtest FAILED: {}", e.msg());
