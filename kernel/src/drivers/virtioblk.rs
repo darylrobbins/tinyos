@@ -40,6 +40,9 @@ const FEATURE_VERSION_1: u32 = 1; // bit 32 -> select-word 1, bit 0
 const DESC_NEXT: u16 = 1;
 const DESC_WRITE: u16 = 2;
 
+/// avail.flags bit 0: ask the device to suppress completion interrupts.
+const VIRTQ_AVAIL_F_NO_INTERRUPT: u16 = 1;
+
 const REQ_T_IN: u32 = 0; // device -> memory (read)
 
 /// Max sectors per request (data buffer size).
@@ -141,6 +144,12 @@ impl VirtioBlk {
         let header = used + used_bytes;
         let data = header + 16;
         let status = data + MAX_SECTORS * SECTOR;
+
+        // This driver is purely polled: never let the device raise a
+        // completion interrupt. Its INTx would share a PCIe SPI with the
+        // virtio-input devices, and the IRQ handler only deasserts *their*
+        // ISR — an unacknowledged blk INTx would storm and wedge the CPU.
+        w16(avail, VIRTQ_AVAIL_F_NO_INTERRUPT);
 
         w64(common + QUEUE_DESC, desc as u64);
         w64(common + QUEUE_DRIVER, avail as u64);
