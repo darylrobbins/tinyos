@@ -773,9 +773,18 @@ fn draw_window(
     fonts
         .mono
         .draw(s, win.app.glyph(), 12.0, r.x + 16, r.y + 14, hue);
-    let gx = r.x + 16 + fonts.mono.measure(win.app.glyph(), 12.0).0 + 10;
+    let mut gx = r.x + 16 + fonts.mono.measure(win.app.glyph(), 12.0).0 + 10;
     let title = alloc::string::String::from(win.app.title());
-    fonts.ui_semibold.draw(s, &title, 13.0, gx, r.y + 13, TX);
+    // Hosted windows lead with their trusted process identity (semibold);
+    // the app-claimed title follows dimmer, so no app can pose as another.
+    if let Some(id) = win.app.identity().filter(|id| !id.is_empty() && *id != title) {
+        let id = alloc::string::String::from(id);
+        fonts.ui_semibold.draw(s, &id, 13.0, gx, r.y + 13, TX);
+        gx += fonts.ui_semibold.measure(&id, 13.0).0 + 8;
+        fonts.ui.draw(s, &title, 13.0, gx, r.y + 13, TX3);
+    } else {
+        fonts.ui_semibold.draw(s, &title, 13.0, gx, r.y + 13, TX);
+    }
 
     // Controls: - [] x (mono, dim).
     for (c, glyph) in [

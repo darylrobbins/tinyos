@@ -20,6 +20,12 @@ pub trait App: core::any::Any {
     /// Enables shell-level downcasts (monitor stats feed, timer retarget).
     fn as_any(&mut self) -> &mut dyn core::any::Any;
     fn title(&self) -> &str;
+    /// Trusted identity for hosted userspace windows: the kernel-registered
+    /// process name, rendered by the chrome next to the (app-claimed) title
+    /// so a window cannot impersonate another program. None for built-ins.
+    fn identity(&self) -> Option<&str> {
+        None
+    }
     /// Short glyph for the dock tile.
     fn glyph(&self) -> &str;
     fn preferred_size(&self, screen_w: i32, screen_h: i32) -> (i32, i32);

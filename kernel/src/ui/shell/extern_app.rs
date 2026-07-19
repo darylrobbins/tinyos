@@ -68,6 +68,9 @@ pub enum OpenResult {
 /// A hosted window backed by an app's shared BGRA surface.
 pub struct ExternApp {
     ch: Arc<ChannelEnd>,
+    /// Kernel-registered process name (trusted; shown by the chrome).
+    name: String,
+    /// App-claimed window title (untrusted).
     title: String,
     w: u32,
     h: u32,
@@ -121,6 +124,7 @@ impl ExternApp {
             });
             return OpenResult::Opened(ExternApp {
                 ch: pending.shell.clone(),
+                name: pending.name.clone(),
                 title,
                 w,
                 h,
@@ -177,6 +181,9 @@ impl App for ExternApp {
     }
     fn title(&self) -> &str {
         &self.title
+    }
+    fn identity(&self) -> Option<&str> {
+        Some(&self.name)
     }
     fn glyph(&self) -> &str {
         "\u{25A3}" // ▣ hosted surface
