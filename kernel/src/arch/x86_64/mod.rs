@@ -6,6 +6,7 @@ pub mod irq;
 pub mod paging;
 pub mod smp;
 pub mod timer;
+pub mod uaccess;
 pub mod user;
 
 use core::arch::asm;
