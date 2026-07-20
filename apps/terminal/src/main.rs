@@ -122,7 +122,7 @@ fn main(env: Env) -> i32 {
                 Event::Key { code, down: true } => term.on_key(code),
                 Event::Key { down: false, .. } => {}
                 Event::Ctrl(code) => {
-                    if code == keys::KEY_C || code == b'C' as u16 {
+                    if code == keys::KEY_C {
                         let _ = proc::kill(term.foreground_tid());
                     }
                 }
