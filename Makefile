@@ -96,6 +96,7 @@ test:
 	cargo test -p tinyfs
 	cargo test -p textui
 	cargo test -p vicore
+	cargo test -p termcore
 	# Both kernel targets must keep compiling (stub drift breaks x86_64).
 	cargo check -p kernel --target aarch64-unknown-uefi
 	cargo check -p kernel --target x86_64-unknown-uefi
