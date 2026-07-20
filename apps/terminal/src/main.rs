@@ -203,6 +203,11 @@ fn main(env: Env) -> i32 {
             }
             term.on_console_msg(&msg.bytes);
         }
+        if term.surface().is_none() {
+            if let Some((va, _, _)) = surf.take() {
+                memobj::unmap(va);
+            }
+        }
         for m in term.take_outbound() {
             let _ = con_kern.send(&m, &[]);
         }

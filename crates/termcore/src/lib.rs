@@ -215,6 +215,14 @@ impl Term {
             }
             OP_SET_INPUT_MODE if bytes.len() >= 8 => {
                 self.mode = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+                // Re-arm RESIZE so a newly-foregrounded app (vi/top) learns the dims.
+                self.queue_resize();
+                // LINES and a full-screen surface are mutually exclusive: returning to
+                // LINES tears down a surface a child left behind (self-heal).
+                if self.mode == INPUT_MODE_LINES {
+                    self.surface = None;
+                }
+                self.dirty = true;
             }
             OP_SET_FOREGROUND if bytes.len() >= 8 => {
                 self.foreground_tid = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
@@ -527,6 +535,7 @@ mod tests {
     fn keys_mode_char_queues_op_char() {
         let mut t = Term::new();
         t.on_console_msg(&set_input_mode_msg(INPUT_MODE_KEYS));
+        let _ = t.take_outbound(); // drain the mode-switch's re-armed RESIZE
         t.on_char('x');
         let out = t.take_outbound();
         assert_eq!(out.len(), 1);
@@ -664,6 +673,30 @@ mod tests {
         let out = t.take_outbound();
         assert_eq!(u32::from_le_bytes(out[0][0..4].try_into().unwrap()), abi::console::OP_CHAR);
     }
+    #[test]
+    fn set_input_mode_keys_requeues_resize() {
+        let mut t = Term::new();
+        t.set_size(80, 24);
+        let _ = t.take_outbound(); // drain the set_size RESIZE
+        t.on_console_msg(&set_input_mode_msg(INPUT_MODE_KEYS));
+        let out = t.take_outbound();
+        assert_eq!(out.len(), 1);
+        assert_eq!(u32::from_le_bytes(out[0][0..4].try_into().unwrap()), OP_RESIZE);
+    }
+
+    #[test]
+    fn set_input_mode_lines_clears_open_surface() {
+        let mut t = Term::new();
+        t.set_size(80, 24);
+        let mut m = OP_SURFACE_OPEN.to_le_bytes().to_vec();
+        m.extend_from_slice(&40u32.to_le_bytes());
+        m.extend_from_slice(&12u32.to_le_bytes());
+        t.on_console_msg(&m);
+        assert!(t.surface().is_some());
+        t.on_console_msg(&set_input_mode_msg(INPUT_MODE_LINES));
+        assert!(t.surface().is_none());
+    }
+
     #[test]
     fn surface_close_restores_line_world() {
         let mut t = Term::new();
