@@ -1,6 +1,6 @@
-//! A small editable multi-line text widget over a pixel Canvas (8x8 font at
-//! 2x). Ported from the kernel Notes editing logic during the Phase 4
-//! eviction; used by the windowed editor app.
+//! A small editable multi-line text widget over a pixel Canvas, rendered with
+//! the anti-aliased GeistMono font. Ported from the kernel Notes editing logic
+//! during the Phase 4 eviction; used by the windowed editor app.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -8,10 +8,10 @@ use alloc::vec::Vec;
 use abi::keys;
 
 use crate::gfx::{self, Canvas, Rect};
+use crate::monofont;
 
-const SCALE: i32 = 2;
-pub const CELL_W: i32 = 8 * SCALE;
-pub const LINE_H: i32 = 8 * SCALE + 4;
+pub const CELL_W: i32 = monofont::ADVANCE;
+pub const LINE_H: i32 = monofont::LINE_H;
 
 pub struct TextPad {
     lines: Vec<String>,
@@ -98,7 +98,7 @@ impl TextPad {
         let visible = (area.h / LINE_H).max(1) as usize;
         let start = (self.line + 1).saturating_sub(visible);
         for (i, line) in self.lines.iter().skip(start).take(visible).enumerate() {
-            c.draw_text(area.x, area.y + i as i32 * LINE_H, line, SCALE, gfx::TX);
+            c.draw_mono_text(area.x, area.y + i as i32 * LINE_H, line, gfx::TX);
         }
         if blink_on {
             let row = (self.line - start) as i32;
