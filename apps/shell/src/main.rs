@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 
 use abi::bootstrap::{TAG_CONSOLE, TAG_FS, TAG_FS_BROKER, TAG_PROC, TAG_PROC_BROKER, TAG_SHELL};
 use abi::console::INPUT_MODE_LINES;
-use abi::fs::{KIND_DIR, FS_NOT_FOUND};
+use abi::fs::KIND_DIR;
 use tinyos_app::process::Child;
 use tinyos_app::syscall::{syscall2, RIGHTS_ALL, SYS_HANDLE_DUP};
 use tinyos_app::{app, entry, fs, proc, process, Env};
@@ -110,13 +110,9 @@ impl Shell {
     }
 
     fn run(&mut self, name: &str, args: &[&str], background: bool) {
-        let elf = match fs::read(&format!("/apps/{name}")) {
-            Ok(e) => e,
-            Err(FS_NOT_FOUND) => return err(&format!("run: {name}: not found")),
-            Err(st) => return err(&format!("run: {name}: fs error {st}")),
-        };
         let grants = self.child_grants();
-        match process::spawn(&elf, args, &grants) {
+        let path = format!("/apps/{name}");
+        match process::exec(&path, args, &grants, /*want_window=*/ true) {
             Ok(child) => {
                 if background {
                     out(DIM, &format!("[{}] {name} &", child.thread_id));
@@ -136,7 +132,7 @@ impl Shell {
                     }
                 }
             }
-            Err(st) => err(&format!("run: spawn failed (status {st})")),
+            Err(st) => err(&format!("run: {name}: not found or failed (status {st})")),
         }
     }
 

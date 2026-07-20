@@ -223,8 +223,20 @@ def main():
 
         # 6. Spawn + argv marshaling from userspace: `hello` echoes its args, so
         #    this exercises the SYS_PROCESS_SPAWN argument path end to end.
+        pre_exec = cur
         step("run with args", "run hello alpha beta",
              "got 2 argument(s):", "[0] alpha", "[1] beta")
+
+        # Kernel-attested identity: the process name the kernel logs on exec
+        # comes from the /apps basename it resolved and loaded (not an argv[0]
+        # claim) — see `kprintln!("tinyos: exec {name}")` in
+        # kernel/src/obj/syscall.rs sys_process_exec. `hello` declares only
+        # the `console` capability, so this run never opens a window and
+        # needs no mouse click / focus juggling to verify. The kernel logs
+        # this before the app produces any output, so scan from before the
+        # step above rather than from its (later) cursor.
+        serial.wait_for("tinyos: exec hello", args.step_timeout, pre_exec)
+        print("smoke: kernel-attested exec name confirmed (hello)")
 
         # 7. Filesystem write path (only reads were covered above): write a file
         #    then read it back through cat.
