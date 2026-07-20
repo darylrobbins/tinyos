@@ -261,7 +261,21 @@ def main():
         time.sleep(0.5)
         step("shell alive after Ctrl+C", "echo aftertop", "[out] aftertop")
 
-        # 11. Durability: the file must survive a real sync+reboot. `reboot`
+        # 11. Launch path: the command palette (Ctrl+K) -> `uterm` -> Enter
+        #     spawns the userspace terminal. It renders to its own window
+        #     (serial can't see that), so this only proves the launch path
+        #     fired the kernel-side launch + spawn without panicking.
+        print("smoke: > (Ctrl+K) uterm")
+        qmp.key(["ctrl", "k"])
+        time.sleep(0.4)
+        qmp.type_line("uterm")
+        cur = serial.wait_for("uterm launched", args.step_timeout, cur)
+        time.sleep(0.6)   # let /apps/terminal spawn sh
+        if serial.panic:
+            raise AssertionError("panic after launching uterm")
+        print("smoke: uterm launched cleanly")
+
+        # 12. Durability: the file must survive a real sync+reboot. `reboot`
         #     syncs then PSCI-resets; QEMU restarts the same process in place,
         #     so we wait for a second boot and read the file back.
         print("smoke: > reboot    (sync + cold reset; file must survive)")
@@ -276,7 +290,7 @@ def main():
         time.sleep(0.5)
         step("file survived reboot", "cat /smoke.txt", "[out] persist42")
 
-        # 12. Clean shutdown: sync + poweroff, then QEMU must exit on its own.
+        # 13. Clean shutdown: sync + poweroff, then QEMU must exit on its own.
         print("smoke: > shutdown")
         qmp.type_line("shutdown")
         serial.wait_for("filesystem synced, going down", args.step_timeout, cur)
