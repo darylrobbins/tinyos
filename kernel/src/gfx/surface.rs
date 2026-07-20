@@ -145,6 +145,131 @@ impl Surface {
         }
     }
 
+    /// Anti-aliased line segment of the given stroke width, with round caps.
+    /// Coordinates are `f32` so callers can center strokes on sub-pixel
+    /// positions; coverage reuses the same distance-field falloff as
+    /// `fill_rounded_rect`.
+    pub fn stroke_line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, width: f32, color: u32) {
+        let hw = width / 2.0;
+        let minx = libm::floorf(x0.min(x1) - hw - 1.0) as i32;
+        let maxx = libm::ceilf(x0.max(x1) + hw + 1.0) as i32;
+        let miny = libm::floorf(y0.min(y1) - hw - 1.0) as i32;
+        let maxy = libm::ceilf(y0.max(y1) + hw + 1.0) as i32;
+        let dx = x1 - x0;
+        let dy = y1 - y0;
+        let len2 = dx * dx + dy * dy;
+        let base = color & 0x00FF_FFFF;
+        let ca = (color >> 24) as f32;
+        for py in miny..maxy {
+            for px in minx..maxx {
+                let fx = px as f32 + 0.5;
+                let fy = py as f32 + 0.5;
+                let t = if len2 <= 0.0 {
+                    0.0
+                } else {
+                    (((fx - x0) * dx + (fy - y0) * dy) / len2).clamp(0.0, 1.0)
+                };
+                let nx = x0 + t * dx - fx;
+                let ny = y0 + t * dy - fy;
+                let d = libm::sqrtf(nx * nx + ny * ny);
+                let cov = (hw + 0.5 - d).clamp(0.0, 1.0);
+                if cov > 0.0 {
+                    self.put(px, py, base | ((ca * cov) as u32) << 24);
+                }
+            }
+        }
+    }
+
+    /// Anti-aliased connected polyline: each adjacent pair of points is a
+    /// `stroke_line`. Round caps make the joints look continuous.
+    pub fn stroke_polyline(&mut self, pts: &[(f32, f32)], width: f32, color: u32) {
+        for seg in pts.windows(2) {
+            self.stroke_line(seg[0].0, seg[0].1, seg[1].0, seg[1].1, width, color);
+        }
+    }
+
+    /// Anti-aliased filled disc.
+    pub fn fill_circle(&mut self, cx: f32, cy: f32, r: f32, color: u32) {
+        let minx = libm::floorf(cx - r - 1.0) as i32;
+        let maxx = libm::ceilf(cx + r + 1.0) as i32;
+        let miny = libm::floorf(cy - r - 1.0) as i32;
+        let maxy = libm::ceilf(cy + r + 1.0) as i32;
+        let base = color & 0x00FF_FFFF;
+        let ca = (color >> 24) as f32;
+        for py in miny..maxy {
+            for px in minx..maxx {
+                let dx = px as f32 + 0.5 - cx;
+                let dy = py as f32 + 0.5 - cy;
+                let d = libm::sqrtf(dx * dx + dy * dy);
+                let cov = (r + 0.5 - d).clamp(0.0, 1.0);
+                if cov > 0.0 {
+                    self.put(px, py, base | ((ca * cov) as u32) << 24);
+                }
+            }
+        }
+    }
+
+    /// Anti-aliased circle outline of the given stroke width.
+    pub fn stroke_circle(&mut self, cx: f32, cy: f32, r: f32, width: f32, color: u32) {
+        let hw = width / 2.0;
+        let outer = r + hw + 1.0;
+        let minx = libm::floorf(cx - outer) as i32;
+        let maxx = libm::ceilf(cx + outer) as i32;
+        let miny = libm::floorf(cy - outer) as i32;
+        let maxy = libm::ceilf(cy + outer) as i32;
+        let base = color & 0x00FF_FFFF;
+        let ca = (color >> 24) as f32;
+        for py in miny..maxy {
+            for px in minx..maxx {
+                let dx = px as f32 + 0.5 - cx;
+                let dy = py as f32 + 0.5 - cy;
+                let d = libm::sqrtf(dx * dx + dy * dy);
+                let cov = (hw + 0.5 - libm::fabsf(d - r)).clamp(0.0, 1.0);
+                if cov > 0.0 {
+                    self.put(px, py, base | ((ca * cov) as u32) << 24);
+                }
+            }
+        }
+    }
+
+    /// Anti-aliased rounded-rectangle outline of the given stroke width, via
+    /// the standard rounded-box signed distance field.
+    pub fn stroke_round_rect(
+        &mut self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        r: f32,
+        width: f32,
+        color: u32,
+    ) {
+        let hw = width / 2.0;
+        let cx = x + w / 2.0;
+        let cy = y + h / 2.0;
+        let hx = w / 2.0;
+        let hy = h / 2.0;
+        let minx = libm::floorf(x - hw - 1.0) as i32;
+        let maxx = libm::ceilf(x + w + hw + 1.0) as i32;
+        let miny = libm::floorf(y - hw - 1.0) as i32;
+        let maxy = libm::ceilf(y + h + hw + 1.0) as i32;
+        let base = color & 0x00FF_FFFF;
+        let ca = (color >> 24) as f32;
+        for py in miny..maxy {
+            for px in minx..maxx {
+                let qx = libm::fabsf(px as f32 + 0.5 - cx) - (hx - r);
+                let qy = libm::fabsf(py as f32 + 0.5 - cy) - (hy - r);
+                let ax = qx.max(0.0);
+                let ay = qy.max(0.0);
+                let d = libm::sqrtf(ax * ax + ay * ay) + qx.max(qy).min(0.0) - r;
+                let cov = (hw + 0.5 - libm::fabsf(d)).clamp(0.0, 1.0);
+                if cov > 0.0 {
+                    self.put(px, py, base | ((ca * cov) as u32) << 24);
+                }
+            }
+        }
+    }
+
     /// Whole-surface copy (dimensions must match).
     pub fn copy_from(&mut self, src: &Surface) {
         self.pixels.copy_from_slice(&src.pixels);

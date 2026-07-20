@@ -6,16 +6,21 @@ use alloc::string::{String, ToString};
 
 use crate::drivers::input::keys;
 use crate::gfx::font::Fonts;
-use crate::gfx::surface::{lerp, Surface};
+use crate::gfx::surface::{with_alpha, Surface};
 
 use super::dock;
+use super::icons::{self, Icon};
 use super::tokens::*;
 
-pub const SUGGESTIONS: [(&str, &str); 3] = [
-    ("Open the system monitor", "monitor"),
-    ("Start a 5 minute timer", "timer 5m"),
-    ("Calculate  = 240/8", "= 240/8"),
+pub const SUGGESTIONS: [(&str, &str, Icon); 3] = [
+    ("Open the system monitor", "monitor", Icon::Monitor),
+    ("Start a 5 minute timer", "timer 5m", Icon::Clock),
+    ("Calculate  = 240/8", "= 240/8", Icon::Equals),
 ];
+
+/// Footer session buttons (right-aligned): label + fixed pixel width.
+const FOOTER_BTNS: [(&str, i32); 3] = [("Lock", 56), ("Restart", 76), ("Shut down", 92)];
+const FOOTER_GAP: i32 = 8;
 
 pub enum Action {
     None,
@@ -33,6 +38,8 @@ pub enum LauncherHit {
     Suggestion(usize),
     App(&'static str),
     Lock,
+    Restart,
+    ShutDown,
     Inside,
 }
 
@@ -191,10 +198,15 @@ impl Palette {
                 return Some(LauncherHit::App(name));
             }
         }
-        // Footer lock button.
-        let (lx, ly) = (px + pw - 84, py + ph - 37);
-        if pxy.0 >= lx && pxy.0 < lx + 64 && pxy.1 >= ly && pxy.1 < ly + 28 {
-            return Some(LauncherHit::Lock);
+        // Footer session buttons: Lock / Restart / Shut down.
+        for (i, &(bx, by, bw, bh)) in footer_rects(px, py, pw, ph).iter().enumerate() {
+            if pxy.0 >= bx && pxy.0 < bx + bw && pxy.1 >= by && pxy.1 < by + bh {
+                return Some(match i {
+                    0 => LauncherHit::Lock,
+                    1 => LauncherHit::Restart,
+                    _ => LauncherHit::ShutDown,
+                });
+            }
         }
         Some(LauncherHit::Inside)
     }
@@ -213,16 +225,9 @@ impl Palette {
         let (px, py, pw, ph) = Self::rect(screen);
         s.frosted_panel(backdrop, px, py, pw, ph, RADIUS_PILL, GLASS_TINT);
 
-        // Header: orb + input + kbd chip.
+        // Header: search magnifier + input + kbd chip.
         let oy = py + 20;
-        for row in 0..34 {
-            let c = lerp(ACC, HUE_VIOLET, (row * 255 / 34) as u32);
-            s.fill_rect(px + 22, oy + row, 34, 1, c);
-        }
-        let (gw, _) = fonts.ui_semibold.measure("*", 16.0);
-        fonts
-            .ui_semibold
-            .draw(s, "*", 16.0, px + 22 + (34 - gw) / 2, oy + 8, ORB_TX);
+        icons::draw(s, Icon::Search, px + 39, oy + 17, 24.0, TX2);
 
         let ix = px + 70;
         if self.input.is_empty() {
@@ -245,24 +250,23 @@ impl Palette {
         fonts.mono.draw(s, "^K", 11.0, px + pw - 48, oy + 10, TX3);
         s.fill_rect(px + 1, py + 74 - 1, pw - 2, 1, STROKE);
 
-        // Suggested.
+        // Suggested: each row led by its real vector icon.
         fonts.mono.draw(s, "SUGGESTED", 11.0, px + 22, py + 82, TX3);
-        for (i, (label, _)) in SUGGESTIONS.iter().enumerate() {
+        for (i, (label, _, icon)) in SUGGESTIONS.iter().enumerate() {
             let sy = Self::suggestion_y(py, i as i32);
-            fonts.ui_semibold.draw(s, "*", 15.0, px + 27, sy + 10, ACC);
+            icons::draw(s, *icon, px + 33, sy + 20, 17.0, ACC);
             fonts.ui.draw(s, label, 13.5, px + 52, sy + 9, TX);
         }
 
-        // Apps grid.
+        // Apps grid: real per-app icon on a faintly hue-tinted tile.
         let ay = Self::suggestion_y(py, 3);
         fonts.mono.draw(s, "APPS", 11.0, px + 22, ay + 4, TX3);
-        for (i, (name, glyph, hue)) in dock::APPS.iter().enumerate() {
+        for (i, (name, icon, hue)) in dock::APPS.iter().enumerate() {
             let (tx, ty, tw, _) = Self::app_tile(screen, i as i32);
-            s.fill_rounded_rect(tx + (tw - 46) / 2, ty + 6, 46, 46, RADIUS_TILE, CARD2);
-            let (gw, _) = fonts.mono.measure(glyph, 15.0);
-            fonts
-                .mono
-                .draw(s, glyph, 15.0, tx + (tw - gw) / 2, ty + 19, *hue);
+            let tile_x = tx + (tw - 46) / 2;
+            s.fill_rounded_rect(tile_x, ty + 6, 46, 46, RADIUS_TILE, CARD2);
+            s.fill_rounded_rect(tile_x, ty + 6, 46, 46, RADIUS_TILE, with_alpha(*hue, 22));
+            icons::draw(s, *icon, tx + tw / 2, ty + 29, 24.0, *hue);
             let cap = capitalize(name);
             let (cw, _) = fonts.ui.measure(&cap, 11.5);
             fonts
@@ -270,7 +274,7 @@ impl Palette {
                 .draw(s, &cap, 11.5, tx + (tw - cw) / 2, ty + 60, TX2);
         }
 
-        // Footer.
+        // Footer: identity on the left, session buttons on the right.
         let fy = py + ph - 46;
         s.fill_rect(px + 1, fy, pw - 2, 1, STROKE);
         fonts.mono.draw(
@@ -281,15 +285,43 @@ impl Palette {
             fy + 16,
             TX2,
         );
-        let (lx, ly) = (px + pw - 84, fy + 9);
-        s.fill_rounded_rect(lx, ly, 64, 28, 8, CARD);
-        let (lw, _) = fonts.ui.measure("Lock", 12.0);
-        fonts.ui.draw(s, "Lock", 12.0, lx + (64 - lw) / 2, ly + 6, TX2);
+        for (&(bx, by, bw, bh), &(label, _)) in
+            footer_rects(px, py, pw, ph).iter().zip(FOOTER_BTNS.iter())
+        {
+            s.fill_rounded_rect(bx, by, bw, bh, 8, CARD);
+            s.stroke_round_rect(
+                bx as f32 + 0.5,
+                by as f32 + 0.5,
+                bw as f32 - 1.0,
+                bh as f32 - 1.0,
+                8.0,
+                1.0,
+                STROKE2,
+            );
+            let (lw, _) = fonts.ui.measure(label, 12.0);
+            fonts
+                .ui
+                .draw(s, label, 12.0, bx + (bw - lw) / 2, by + 7, TX2);
+        }
 
         if let Some(hint) = &self.hint {
             fonts.ui.draw(s, hint, 12.0, px + 70, py + 48, TX3);
         }
     }
+}
+
+/// Footer session-button rects (x, y, w, h), right-aligned in `FOOTER_BTNS`
+/// order. Shared by `draw` and `hit_test` so they never drift.
+fn footer_rects(px: i32, py: i32, pw: i32, ph: i32) -> [(i32, i32, i32, i32); 3] {
+    let total: i32 = FOOTER_BTNS.iter().map(|(_, w)| *w).sum::<i32>() + FOOTER_GAP * 2;
+    let y = py + ph - 37;
+    let mut x = px + pw - 22 - total;
+    let mut out = [(0, 0, 0, 0); 3];
+    for (slot, &(_, w)) in out.iter_mut().zip(FOOTER_BTNS.iter()) {
+        *slot = (x, y, w, 28);
+        x += w + FOOTER_GAP;
+    }
+    out
 }
 
 fn capitalize(s: &str) -> String {

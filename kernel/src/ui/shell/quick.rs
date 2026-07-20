@@ -8,6 +8,7 @@ use crate::gfx::surface::Surface;
 use crate::mem;
 
 use super::clockpill;
+use super::icons::{self, Icon};
 use super::tokens::*;
 
 const W: i32 = 400;
@@ -35,12 +36,15 @@ pub fn draw(s: &mut Surface, fonts: &mut Fonts, backdrop: &Surface, screen: (i32
     let (px, py, pw, ph) = rect(screen);
     s.frosted_panel(backdrop, px, py, pw, ph, 16, GLASS_TINT);
 
-    for (i, (label, sub)) in [("Lock", "Ctrl+L"), ("Timer", "5 min"), ("About", "tinyOS")]
-        .iter()
-        .enumerate()
-    {
+    let tiles = [
+        ("Lock", "Ctrl+L", Icon::Lock, ACC),
+        ("Timer", "5 min", Icon::Clock, HUE_VIOLET),
+        ("About", "tinyOS", Icon::App, TX2),
+    ];
+    for (i, (label, sub, icon, hue)) in tiles.iter().enumerate() {
         let (tx, ty, tw, th) = tile_rect(screen, i as i32);
         s.fill_rounded_rect(tx, ty, tw, th, 12, CARD);
+        icons::draw(s, *icon, tx + tw - 24, ty + 22, 18.0, *hue);
         fonts.ui_semibold.draw(s, label, 13.0, tx + 14, ty + 12, TX);
         fonts.ui.draw(s, sub, 11.0, tx + 14, ty + 34, TX2);
     }

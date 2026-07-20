@@ -26,8 +26,15 @@ pub trait App: core::any::Any {
     fn identity(&self) -> Option<&str> {
         None
     }
-    /// Short glyph for the dock tile.
+    /// Short glyph for the dock tile. Retained as a text fallback; the shell
+    /// prefers the vector `icon()` for chrome and dock rendering.
     fn glyph(&self) -> &str;
+    /// Vector icon for the dock tile and window title bar. Built-ins whose
+    /// name matches the dock `APPS` table are resolved there; this default
+    /// covers hosted userspace windows and anything unlisted.
+    fn icon(&self) -> super::icons::Icon {
+        super::icons::Icon::App
+    }
     fn preferred_size(&self, screen_w: i32, screen_h: i32) -> (i32, i32);
     fn min_size(&self) -> (i32, i32) {
         (260, 160)
