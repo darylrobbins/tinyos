@@ -521,7 +521,12 @@ fn sys_process_exec(
             .filter(|s| !s.is_empty())
             .unwrap_or(&path),
     );
-    kprintln!("tinyos: exec {name}");
+    // Confine to the flat /apps namespace: the attested identity must be the
+    // real path, so `/apps/../evil` (basename "evil") or a trailing slash can't
+    // masquerade. sh always runs `/apps/<name>`, so this rejects nothing real.
+    if path != alloc::format!("/apps/{name}") {
+        return Err(ST_INVALID_ARGS);
+    }
 
     // The KERNEL reads the app (ambient /apps, like SvcJob) — this is the
     // attestation: identity comes from what the kernel resolved, not a claim.
@@ -529,6 +534,7 @@ fn sys_process_exec(
         Ok(e) => e,
         Err(_) => return Err(ST_INVALID_ARGS), // missing/unreadable app
     };
+    kprintln!("tinyos: exec {name}");
 
     // Authority: move the caller's grants, unchanged.
     let mut grants = take_grants(&p, grants_ptr, grant_count)?;
