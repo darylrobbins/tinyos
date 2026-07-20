@@ -308,3 +308,23 @@ changes behavior; leaf apps recompile against the new `Env` unchanged.
 - SP2: delete App trait, flip default, migrate serial mirror, compositor respawn.
 - Later: dir-scoped FS brokers, read-only PROC, userspace `fsd` serving the same
   broker protocol.
+
+### SP1 prerequisite — per-request reply channel (from the SP0 final review)
+
+SP0 forwards **one** broker channel (a single `Arc<ChannelEnd>`, one shared RX
+queue) down the whole descendant tree. That is safe in SP0 only because every
+`OP_CONNECT` reply carries an *interchangeable* full-root connection: if two
+descendants mint concurrently they can at worst receive each other's identical
+connection — no corruption, no starvation.
+
+It stops being safe the moment connections stop being interchangeable — i.e.
+when SP1/later adds **scoped FS or read-only PROC** (e.g. an `OP_CONNECT`
+argument selecting a jail or privilege). A shared reply queue could then deliver
+a *privileged* connection to the wrong requester. **Before any per-connection
+scoping lands, switch to a per-request reply channel:** the client creates a
+fresh channel pair, sends one end inside `OP_CONNECT`, and the server replies on
+that end instead of the shared broker channel. Touches `kernel/src/svc.rs`,
+`kernel/src/fs/server.rs`, `kernel/src/obj/procserver.rs`, `apps/sdk/src/broker.rs`.
+(Also minor, deferred: `term::spawn_app` drops the app's MAIN-channel kernel end
+— fine until an app polls handle 1 for parent liveness; and broker reply-send
+errors are swallowed — unreachable while clients drain promptly.)
