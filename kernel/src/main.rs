@@ -15,6 +15,7 @@ mod mem;
 mod obj;
 mod sched;
 mod smoke;
+mod svc;
 mod term;
 mod ui;
 
@@ -154,6 +155,8 @@ fn kmain(mut fb: FbInfo, memory_map: MemoryMapOwned) -> ! {
     FB_SIZE.call_once(|| (fb.width, fb.height));
     let (input, blk) = drivers::probe();
     fs::init(blk);
+    // Standing FS/PROC broker servers (pumped by the ui_thread below).
+    svc::init();
     arch::irq::init();
     kprintln!("tinyos: starting scheduler on cpu{}", arch::cpu_id());
 
@@ -189,6 +192,7 @@ fn ui_thread_main() {
         let frame_due = now >= deadline;
         shell.handle(&events);
         shell.pump_externals();
+        crate::svc::pump();
         shell.stats_tick(events.len() as u32);
         shell.pump_app_requests();
 
