@@ -13,10 +13,12 @@ pub struct Child {
     pub proc_h: u32,
     /// Parent end of the child's main channel; close when done.
     pub main_h: u32,
-    /// The kernel minted a window for this child (exec only). A shell uses this
-    /// to auto-background windowed apps — they don't touch the console, so
-    /// blocking the prompt on them would strand a GUI window.
-    pub windowed: bool,
+    /// This child is a pure-window app (declares `window`, not `console`) that
+    /// the kernel gave its own window (exec only). A shell auto-backgrounds
+    /// these — they don't touch the launching console, so blocking the prompt on
+    /// them would strand a GUI window. Console-surface apps (top, vi) are NOT
+    /// detached and stay foreground.
+    pub detached: bool,
 }
 
 /// Spawn `elf` with `args` and explicit `grants` (tag, handle) — granted
@@ -58,7 +60,7 @@ pub fn spawn(elf: &[u8], args: &[&str], grants: &[(u32, u32)]) -> Result<Child, 
     syscall1(SYS_HANDLE_CLOSE, mem);
     match r.ok() {
         // spawn never mints a window (raw ELF, unattested identity).
-        Ok(tid) => Ok(Child { thread_id: tid as u32, proc_h: out[0], main_h: out[1], windowed: false }),
+        Ok(tid) => Ok(Child { thread_id: tid as u32, proc_h: out[0], main_h: out[1], detached: false }),
         Err(st) => Err(st),
     }
 }
@@ -99,7 +101,7 @@ pub fn exec(path: &str, args: &[&str], grants: &[(u32, u32)], want_window: bool)
             thread_id: tid as u32,
             proc_h: out[0],
             main_h: out[1],
-            windowed: out[2] != 0,
+            detached: out[2] != 0,
         }),
         Err(st) => Err(st),
     }

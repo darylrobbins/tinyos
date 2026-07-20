@@ -41,3 +41,8 @@ fn main(env: Env) -> i32 {
 }
 
 app!(main);
+
+// A pure window app: it only uses `env.shell` (the window), no console/fs/proc.
+// Declaring just `window` keeps it least-privileged and marks it detached, so a
+// shell backgrounds `run pixels` instead of blocking the prompt on the window.
+tinyos_app::declare_caps!(b"window");

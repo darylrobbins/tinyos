@@ -114,11 +114,11 @@ impl Shell {
         let path = format!("/apps/{name}");
         match process::exec(&path, args, &grants, /*want_window=*/ true) {
             Ok(child) => {
-                // A windowed app runs in its own window and never touches this
+                // A detached app (its own window, no console) never touches this
                 // console, so holding the prompt on it would just strand a GUI
                 // window (you couldn't launch a second app). Auto-background it
-                // even without `&`; only console apps (vi, top) run foreground.
-                if background || child.windowed {
+                // even without `&`; console apps (vi, top) run foreground.
+                if background || child.detached {
                     out(DIM, &format!("[{}] {name} &", child.thread_id));
                     self.jobs.push(Job { name: name.to_string(), child });
                 } else {

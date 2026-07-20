@@ -95,4 +95,4 @@ fn main(env: Env) -> i32 {
 }
 
 app!(main);
-tinyos_app::declare_caps!(b"console\nwindow\nfs:self");
+tinyos_app::declare_caps!(b"window\nfs:self");
