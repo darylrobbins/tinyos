@@ -18,3 +18,7 @@ pub const TAG_CONSOLE: u32 = 1;
 pub const TAG_SHELL: u32 = 2;
 pub const TAG_FS: u32 = 3;
 pub const TAG_PROC: u32 = 4;
+/// Broker channels: a spawner forwards these so a child can mint its OWN
+/// fresh FS/PROC connections rather than share the spawner's.
+pub const TAG_FS_BROKER: u32 = 5;
+pub const TAG_PROC_BROKER: u32 = 6;

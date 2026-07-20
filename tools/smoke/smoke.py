@@ -239,6 +239,14 @@ def main():
         cur = serial.wait_for("hello done", args.step_timeout, cur)
         print("smoke: background job reaped")
 
+        # Broker regression: a background child is alive (holding its OWN
+        # broker-minted FS/PROC connection) while the foreground shell does FS
+        # work on ITS connection. Pre-broker this shared one channel; now they
+        # are isolated. Both must produce correct output.
+        step("bg child + fg fs", "run hello &", "] hello &")
+        step("fg write while child alive", "write /broker.txt isolated")
+        step("fg read while child alive", "cat /broker.txt", "[out] isolated")
+
         # 9. Error path must report and return to a live prompt, not wedge.
         step("unknown app", "run nope", "run: nope: not found")
 

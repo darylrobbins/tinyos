@@ -12,7 +12,7 @@ use crate::console::Console;
 use crate::syscall::*;
 
 /// Bootstrap grant tags (from the shared abi crate).
-pub use abi::bootstrap::{TAG_CONSOLE, TAG_FS, TAG_PROC, TAG_SHELL};
+pub use abi::bootstrap::{TAG_CONSOLE, TAG_FS, TAG_FS_BROKER, TAG_PROC, TAG_PROC_BROKER, TAG_SHELL};
 
 /// Everything an app receives at startup. Channel(0) = grant absent.
 pub struct Env {
@@ -21,6 +21,8 @@ pub struct Env {
     pub shell: Channel,
     pub fs: Channel,
     pub proc: Channel,
+    pub fs_broker: Channel,
+    pub proc_broker: Channel,
 }
 
 use abi::bootstrap::MAIN_CHANNEL;
@@ -55,6 +57,8 @@ fn parse_bootstrap(msg: &Msg) -> Env {
     let mut shell = Channel(0);
     let mut fs = Channel(0);
     let mut proc = Channel(0);
+    let mut fs_broker = Channel(0);
+    let mut proc_broker = Channel(0);
     for i in 0..grant_count {
         let tag = u32at(b, off);
         off += 4;
@@ -64,6 +68,8 @@ fn parse_bootstrap(msg: &Msg) -> Env {
             TAG_SHELL => shell = Channel(handle),
             TAG_FS => fs = Channel(handle),
             TAG_PROC => proc = Channel(handle),
+            TAG_FS_BROKER => fs_broker = Channel(handle),
+            TAG_PROC_BROKER => proc_broker = Channel(handle),
             _ => {}
         }
     }
@@ -73,7 +79,7 @@ fn parse_bootstrap(msg: &Msg) -> Env {
     if proc.0 != 0 {
         crate::proc::set_client(proc);
     }
-    Env { args, console, shell, fs, proc }
+    Env { args, console, shell, fs, proc, fs_broker, proc_broker }
 }
 
 /// Called by the `app!`-generated `_start`. Never returns.
@@ -87,6 +93,8 @@ pub fn run(main: fn(Env) -> i32) -> ! {
             shell: Channel(0),
             fs: Channel(0),
             proc: Channel(0),
+            fs_broker: Channel(0),
+            proc_broker: Channel(0),
         },
     };
     unsafe {

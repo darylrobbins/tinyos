@@ -47,10 +47,6 @@ pub struct Terminal {
 
 struct RunningApp {
     name: String,
-    /// File-protocol server for this app's FS channel.
-    fs_srv: crate::fs::service::FsService,
-    /// Process-control server for this app's PROC channel.
-    proc_srv: crate::obj::procsrv::ProcService,
     process: alloc::sync::Arc<crate::obj::process::Process>,
     thread_id: u32,
     console: alloc::sync::Arc<crate::obj::channel::ChannelEnd>,
@@ -679,32 +675,46 @@ impl Terminal {
     /// ones join `bg_jobs`. Returns the thread id.
     #[cfg(target_arch = "aarch64")]
     fn spawn_app(&mut self, name: &str, argv: &[String], background: bool) -> Result<u32, String> {
+        use crate::obj::channel::create;
+        use crate::obj::handle::{Handle, RIGHTS_ALL};
+        use crate::obj::Object;
+        use abi::bootstrap::{
+            TAG_CONSOLE, TAG_FS, TAG_FS_BROKER, TAG_PROC, TAG_PROC_BROKER, TAG_SHELL,
+        };
+
         let elf = crate::fs::read("/", &format!("/apps/{name}")).map_err(|e| format!("{e}"))?;
-        // Developer mode: launching from the terminal is an explicit user
-        // action, so the app gets every bootstrap channel and sees the whole
-        // filesystem (jail "/"), with relative paths against the cwd.
-        let app = crate::obj::loader::spawn(
+
+        // Console + shell channels: this terminal keeps the kernel ends.
+        let (console_app, console_kern) = create();
+        let (shell_app, shell_kern) = create();
+
+        // FS/PROC: a fresh isolated connection from the standing servers, plus
+        // the broker channels so the child can mint for ITS own children.
+        let grants: alloc::vec::Vec<(u32, Handle)> = alloc::vec![
+            (TAG_CONSOLE, Handle::new(Object::Channel(console_app), RIGHTS_ALL)),
+            (TAG_SHELL, Handle::new(Object::Channel(shell_app), RIGHTS_ALL)),
+            (TAG_FS, crate::svc::mint_fs()),
+            (TAG_PROC, crate::svc::mint_proc()),
+            (TAG_FS_BROKER, crate::svc::fs_broker_handle()),
+            (TAG_PROC_BROKER, crate::svc::proc_broker_handle()),
+        ];
+
+        let (process, tid, _main_kern) = crate::obj::loader::spawn_with_grants(
             name.to_string(),
             &elf,
             argv,
-            &crate::obj::loader::GrantSet::all(),
+            grants,
         )
         .map_err(|e| e.msg())?;
-        let tid = app.thread_id;
-        // Hand the window channel to the compositor: if the app (or a child
-        // it forwards the channel to) opens a window, the shell hosts it.
-        crate::ui::shell::extern_app::register(app.shell, name.to_string());
+
+        // Hand the window channel to the compositor.
+        crate::ui::shell::extern_app::register(shell_kern, name.to_string());
+
         let job = RunningApp {
             name: name.to_string(),
-            fs_srv: crate::fs::service::FsService::new(
-                app.fs,
-                String::from("/"),
-                self.cwd.clone(),
-            ),
-            proc_srv: crate::obj::procsrv::ProcService::new(app.proc, true),
-            process: app.process,
+            process,
             thread_id: tid,
-            console: app.console,
+            console: console_kern,
             partial: String::new(),
             partial_color: FG,
             prompt_spans: Vec::new(),
@@ -732,8 +742,6 @@ impl Terminal {
         let mut lines: Vec<(String, u32)> = Vec::new();
         let mut gone: Vec<u32> = Vec::new();
         for app in self.bg_jobs.iter_mut() {
-            app.fs_srv.pump();
-            app.proc_srv.pump();
             let mut replies: Vec<Vec<u8>> = Vec::new();
             while let Ok(msg) = app.console.recv() {
                 if msg.bytes.len() < 4 {
@@ -799,8 +807,6 @@ impl Terminal {
         self.pump_bg();
         let (cols, rows) = (self.view.cols, self.rows);
         let Some(app) = &mut self.running else { return };
-        app.fs_srv.pump();
-        app.proc_srv.pump();
         let mut lines: Vec<(String, u32)> = Vec::new();
         let mut replies: Vec<Vec<u8>> = Vec::new();
         let mut clear_screen = false;

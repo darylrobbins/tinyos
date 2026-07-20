@@ -82,6 +82,12 @@ impl FsService {
         Self { ch, jail, base, fds: Vec::new(), children: Vec::new() }
     }
 
+    /// True while the client end is still open. Used by FsServer to reap
+    /// connections whose app has exited (its client handle was dropped).
+    pub fn is_open(&self) -> bool {
+        self.ch.signals() & SIG_PEER_CLOSED == 0
+    }
+
     fn resolve(&self, path: &str) -> Result<String, u32> {
         jailed_path(&self.jail, &self.base, path)
     }

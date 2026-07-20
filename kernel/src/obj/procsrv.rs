@@ -15,6 +15,7 @@ use alloc::vec::Vec;
 use abi::proc::*;
 
 use crate::obj::channel::{ChannelEnd, Message};
+use crate::obj::SIG_PEER_CLOSED;
 use crate::sched;
 use crate::sched::thread::{Class, State};
 
@@ -26,6 +27,11 @@ pub struct ProcService {
 impl ProcService {
     pub fn new(ch: Arc<ChannelEnd>, can_kill: bool) -> Self {
         Self { ch, can_kill }
+    }
+
+    /// True while the client end is still open (see FsService::is_open).
+    pub fn is_open(&self) -> bool {
+        self.ch.signals() & SIG_PEER_CLOSED == 0
     }
 
     pub fn pump(&mut self) {

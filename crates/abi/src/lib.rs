@@ -8,6 +8,7 @@
 #![no_std]
 
 pub mod bootstrap;
+pub mod broker;
 pub mod console;
 pub mod fs;
 pub mod keys;
