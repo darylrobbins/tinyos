@@ -12,7 +12,7 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use abi::bootstrap::{TAG_CONSOLE, TAG_FS, TAG_PROC, TAG_SHELL};
+use abi::bootstrap::{TAG_CONSOLE, TAG_FS, TAG_FS_BROKER, TAG_PROC, TAG_PROC_BROKER, TAG_SHELL};
 use abi::console::INPUT_MODE_LINES;
 use abi::fs::{KIND_DIR, FS_NOT_FOUND};
 use tinyos_app::process::Child;
@@ -73,18 +73,35 @@ struct Shell {
 }
 
 impl Shell {
-    /// Dup the capabilities a child inherits: console (shared), fs, window
-    /// server, process control.
+    /// Capabilities a child inherits. Console + shell are shared (dup); FS and
+    /// PROC are a FRESH private connection minted per child from the broker, so
+    /// siblings and background jobs never share a request/reply channel. The
+    /// brokers themselves are forwarded so the child can mint for its children.
     fn child_grants(&self) -> Vec<(u32, u32)> {
         let mut g = Vec::new();
-        for (tag, ch) in [
-            (TAG_CONSOLE, self.env.console.0),
-            (TAG_FS, self.env.fs.0),
-            (TAG_SHELL, self.env.shell.0),
-            (TAG_PROC, self.env.proc.0),
-        ] {
+        for (tag, ch) in [(TAG_CONSOLE, self.env.console.0), (TAG_SHELL, self.env.shell.0)] {
             if ch != 0 {
                 if let Ok(h) = syscall2(SYS_HANDLE_DUP, ch as u64, RIGHTS_ALL as u64).ok() {
+                    g.push((tag, h as u32));
+                }
+            }
+        }
+        if self.env.fs_broker.0 != 0 {
+            if let Ok(c) = tinyos_app::broker::connect(self.env.fs_broker) {
+                g.push((TAG_FS, c.0));
+            }
+        }
+        if self.env.proc_broker.0 != 0 {
+            if let Ok(c) = tinyos_app::broker::connect(self.env.proc_broker) {
+                g.push((TAG_PROC, c.0));
+            }
+        }
+        for (tag, br) in [
+            (TAG_FS_BROKER, self.env.fs_broker.0),
+            (TAG_PROC_BROKER, self.env.proc_broker.0),
+        ] {
+            if br != 0 {
+                if let Ok(h) = syscall2(SYS_HANDLE_DUP, br as u64, RIGHTS_ALL as u64).ok() {
                     g.push((tag, h as u32));
                 }
             }
