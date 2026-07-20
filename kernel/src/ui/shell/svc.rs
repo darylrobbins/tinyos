@@ -22,8 +22,9 @@ pub struct SvcJob {
 impl SvcJob {
     /// Load /apps/<name> and spawn it as a shell-hosted (windowed) app,
     /// granting the app's declared caps intersected with launcher policy:
-    /// FS only inside /data/<name> or /shared/*, proc without kill. Apps
-    /// with no caps blob get the legacy default (jailed FS + proc + window).
+    /// FS only inside /data/<name> or /shared/*, proc without kill. Caps are
+    /// least-privilege: an app that declares nothing gets nothing (the loader
+    /// fails closed), so a launched app receives exactly what it declared ∩ policy.
     pub fn spawn(name: &str, argv: &[String]) -> Result<Self, String> {
         let elf = crate::fs::read("/", &format!("/apps/{name}"))
             .map_err(|e| format!("{e}"))?;
