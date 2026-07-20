@@ -45,6 +45,7 @@ pub struct Term {
     scrollback: VecDeque<Line>,
     prompt: Vec<(String, u32)>,
     input: String,
+    /// Char index (not byte index) into `input`.
     cursor: usize,
     partial: String,
     partial_color: u32,
@@ -176,6 +177,19 @@ impl Term {
         self.mode == INPUT_MODE_KEYS
     }
 
+    /// LINES-mode prompt spans: an explicit `OP_SET_PROMPT` wins; otherwise
+    /// an unterminated `partial` write doubles as the prompt (mirrors
+    /// `kernel/src/term/mod.rs`'s per-frame prompt computation).
+    fn effective_prompt(&self) -> Vec<(String, u32)> {
+        if !self.prompt.is_empty() {
+            self.prompt.clone()
+        } else if !self.partial.is_empty() {
+            alloc::vec![(self.partial.clone(), self.partial_color)]
+        } else {
+            Vec::new()
+        }
+    }
+
     fn byte_index(&self, col: usize) -> usize {
         self.input.char_indices().nth(col).map(|(i, _)| i).unwrap_or(self.input.len())
     }
@@ -190,11 +204,8 @@ impl Term {
             return;
         }
         if c == '\n' {
-            let prompt_text: String = if !self.prompt.is_empty() {
-                self.prompt.iter().map(|(t, _)| t.as_str()).collect()
-            } else {
-                self.partial.clone()
-            };
+            let prompt_text: String =
+                self.effective_prompt().iter().map(|(t, _)| t.as_str()).collect();
             let text = self.input.clone();
             let echo = alloc::format!("{prompt_text}{text}");
             self.freeze(echo, DIM);
@@ -287,14 +298,17 @@ impl Term {
         self.scrollback.iter()
     }
 
-    pub fn prompt(&self) -> &[(String, u32)] {
-        &self.prompt
+    /// Effective LINES-mode prompt spans: an explicit `OP_SET_PROMPT` wins;
+    /// otherwise an unterminated `partial` write doubles as the prompt.
+    pub fn prompt(&self) -> Vec<(String, u32)> {
+        self.effective_prompt()
     }
 
     pub fn input(&self) -> &str {
         &self.input
     }
 
+    /// Char index (not byte index) into `input()`.
     pub fn cursor(&self) -> usize {
         self.cursor
     }
@@ -304,8 +318,8 @@ impl Term {
 mod tests {
     use super::*;
     use abi::console::{
-        OP_CHAR, OP_INPUT_LINE, OP_RESIZE, OP_SET_FOREGROUND, OP_SET_PROMPT, OP_WRITE_STYLED,
-        INPUT_MODE_KEYS,
+        OP_CHAR, OP_CLEAR, OP_HELLO_ACK, OP_INPUT_LINE, OP_RESIZE, OP_SET_FOREGROUND,
+        OP_SET_PROMPT, OP_WRITE_STYLED, INPUT_MODE_KEYS,
     };
 
     fn styled(fg: u32, s: &str) -> alloc::vec::Vec<u8> {
@@ -442,6 +456,40 @@ mod tests {
         assert_eq!(t.foreground_tid(), 0);
         t.on_console_msg(&set_foreground_msg(42));
         assert_eq!(t.foreground_tid(), 42);
+    }
+
+    #[test]
+    fn partial_write_doubles_as_prompt_without_explicit_prompt() {
+        let mut t = Term::new();
+        let mut b = abi::console::OP_WRITE.to_le_bytes().to_vec();
+        b.extend_from_slice(b"name? ");
+        t.on_console_msg(&b);
+        let spans = t.prompt();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].0, "name? ");
+    }
+
+    #[test]
+    fn hello_queues_hello_ack() {
+        let mut t = Term::new();
+        let b = abi::console::OP_HELLO.to_le_bytes().to_vec();
+        t.on_console_msg(&b);
+        let out = t.take_outbound();
+        assert_eq!(out.len(), 1);
+        let mut expect = OP_HELLO_ACK.to_le_bytes().to_vec();
+        expect.extend_from_slice(&1u32.to_le_bytes());
+        expect.extend_from_slice(&0u32.to_le_bytes());
+        assert_eq!(out[0], expect);
+    }
+
+    #[test]
+    fn clear_empties_scrollback() {
+        let mut t = Term::new();
+        t.on_console_msg(&styled(0, "hello\n"));
+        assert_eq!(t.scrollback().count(), 1);
+        let b = OP_CLEAR.to_le_bytes().to_vec();
+        t.on_console_msg(&b);
+        assert_eq!(t.scrollback().count(), 0);
     }
 
     #[test]
