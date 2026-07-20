@@ -29,7 +29,7 @@ pub const SYS_PROCESS_SPAWN: u64 = 13;
 /// attesting identity from the resolved /apps basename. flags bit 0 =
 /// EXEC_REQUEST_WINDOW: mint a window under the attested identity (honored iff
 /// the app's manifest declares `window`).
-pub const SYS_PROCESS_EXEC: u64 = 14;
+pub const SYS_PROCESS_EXEC: u64 = 16;
 
 /// flags bit for SYS_PROCESS_EXEC: request a window for the child.
 pub const EXEC_REQUEST_WINDOW: u64 = 1;
