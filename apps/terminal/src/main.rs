@@ -186,8 +186,8 @@ fn main(env: Env) -> i32 {
             if op == Some(abi::console::OP_SURFACE_OPEN) && msg.bytes.len() >= 12 {
                 let cols = u32::from_le_bytes(msg.bytes[4..8].try_into().unwrap()) as usize;
                 let rows = u32::from_le_bytes(msg.bytes[8..12].try_into().unwrap()) as usize;
-                if (1..=1000).contains(&cols) && (1..=500).contains(&rows) {
-                    if let Some(&h) = msg.handles.first() {
+                if let Some(&h) = msg.handles.first() {
+                    if (1..=1000).contains(&cols) && (1..=500).contains(&rows) {
                         let need = (cols * rows * core::mem::size_of::<abi::console::Cell>()) as u64;
                         if let Ok(sz) = memobj::size(h) {
                             if need <= sz {
@@ -197,6 +197,12 @@ fn main(env: Env) -> i32 {
                             }
                         }
                     }
+                    // The mapping (if any) holds its own keepalive Arc independent of
+                    // the handle table, so this handle-table entry is redundant once
+                    // the map/validate work above is done — close it on every path
+                    // (mapped or rejected) to avoid handle-table exhaustion from a
+                    // child spamming OP_SURFACE_OPEN.
+                    memobj::close(h);
                 }
             } else if op == Some(abi::console::OP_SURFACE_CLOSE) {
                 if let Some((va, _, _)) = surf.take() { memobj::unmap(va); }
