@@ -521,6 +521,7 @@ fn sys_process_exec(
             .filter(|s| !s.is_empty())
             .unwrap_or(&path),
     );
+    kprintln!("tinyos: exec {name}");
 
     // The KERNEL reads the app (ambient /apps, like SvcJob) — this is the
     // attestation: identity comes from what the kernel resolved, not a claim.
