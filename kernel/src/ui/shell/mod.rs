@@ -152,7 +152,14 @@ impl Shell {
             pending: Vec::new(),
             svc_jobs: Vec::new(),
         };
-        shell.open(Box::new(crate::apps::terminal::TerminalApp::new()), true);
+        // Boot into the userspace terminal where it can run (aarch64 with
+        // /apps/terminal present); otherwise fall back to the in-kernel
+        // terminal — the only shell on x86_64 or a diskless boot. The window
+        // appears a few frames after the splash while the app execs and opens
+        // it (vs the kernel terminal's synchronous window).
+        if !shell.launch_uterm(true) {
+            shell.open(Box::new(crate::apps::terminal::TerminalApp::new()), true);
+        }
         shell
     }
 
