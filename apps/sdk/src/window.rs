@@ -135,4 +135,10 @@ impl Window {
         let mut it = [WaitItem { handle: self.ch.0, want: SIG_READABLE, observed: 0 }];
         let _ = wait_many(&mut it, deadline_us);
     }
+
+    /// The raw channel handle, for building a combined wait_many across the
+    /// window channel and (e.g.) a hosted app's console channel.
+    pub fn handle(&self) -> u32 {
+        self.ch.0
+    }
 }

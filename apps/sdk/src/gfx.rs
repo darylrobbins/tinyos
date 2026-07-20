@@ -294,3 +294,25 @@ pub fn measure_ui_text(s: &str) -> (i32, i32) {
         .sum();
     (w, uifont::LINE_H)
 }
+
+impl<'a> Canvas<'a> {
+    /// Draw `s` with the monospace atlas at a fixed cell advance; `y` is the
+    /// top of the line box. Non-ASCII chars occupy a cell but draw nothing.
+    pub fn draw_mono_text(&mut self, x: i32, y: i32, s: &str, color: u32) {
+        let baseline = y + crate::monofont::ASCENT;
+        let mut pen = x;
+        for ch in s.chars() {
+            if let Some(g) = crate::monofont::GLYPHS.get((ch as usize).wrapping_sub(32)) {
+                if g.w > 0 {
+                    self.draw_alpha_mask(pen + g.ox, baseline - g.oy, g.data, g.w, g.h, color);
+                }
+            }
+            pen += crate::monofont::ADVANCE;
+        }
+    }
+}
+
+/// Pixel size of `s` drawn with `draw_mono_text`.
+pub fn measure_mono_text(s: &str) -> (i32, i32) {
+    (s.chars().count() as i32 * crate::monofont::ADVANCE, crate::monofont::LINE_H)
+}
