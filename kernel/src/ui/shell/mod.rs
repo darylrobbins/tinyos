@@ -505,6 +505,7 @@ impl Shell {
             // SDK apps, spawned from /apps (Phase 4: the launcher speaks
             // the same protocols as the terminal's `run`).
             "clock" | "solitaire" | "pixels" => self.launch_app(name, &[]),
+            "uterm" => self.launch_uterm(),
             _ => {}
         }
     }
@@ -515,6 +516,42 @@ impl Shell {
             Ok(j) => self.svc_jobs.push(j),
             Err(e) => kprintln!("launch {name}: {e}"),
         }
+    }
+
+    /// Launch the userspace terminal (/apps/terminal) as a top-level window
+    /// with terminal-grade grants: window + a broker-minted whole-root FS and
+    /// can_kill PROC + the FS/PROC brokers (to mint sh's connections). No
+    /// console — it creates its own to serve sh. aarch64 only.
+    #[cfg(target_arch = "aarch64")]
+    pub fn launch_uterm(&mut self) {
+        use crate::obj::channel::create;
+        use crate::obj::handle::{Handle, RIGHTS_ALL};
+        use crate::obj::Object;
+        use abi::bootstrap::{TAG_FS, TAG_FS_BROKER, TAG_PROC, TAG_PROC_BROKER, TAG_SHELL};
+        let elf = match crate::fs::read("/", "/apps/terminal") {
+            Ok(e) => e,
+            Err(e) => { kprintln!("uterm: /apps/terminal: {e}"); return; }
+        };
+        let (shell_app, shell_kern) = create();
+        let grants = alloc::vec![
+            (TAG_SHELL, Handle::new(Object::Channel(shell_app), RIGHTS_ALL)),
+            (TAG_FS, crate::svc::mint_fs()),
+            (TAG_PROC, crate::svc::mint_proc()),
+            (TAG_FS_BROKER, crate::svc::fs_broker_handle()),
+            (TAG_PROC_BROKER, crate::svc::proc_broker_handle()),
+        ];
+        match crate::obj::loader::spawn_with_grants("terminal".into(), &elf, &[], grants) {
+            Ok((_p, tid, _main)) => {
+                crate::ui::shell::extern_app::register(shell_kern, "terminal".into());
+                kprintln!("tinyos: uterm launched (thread {tid})");
+            }
+            Err(e) => kprintln!("uterm: spawn failed: {}", e.msg()),
+        }
+    }
+
+    #[cfg(not(target_arch = "aarch64"))]
+    pub fn launch_uterm(&mut self) {
+        kprintln!("uterm: userspace unsupported on this arch");
     }
 
     fn act(&mut self, action: Action) {
