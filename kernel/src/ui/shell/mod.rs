@@ -108,6 +108,7 @@ pub struct Shell {
     pointer: (i32, i32),
     shift: bool,
     ctrl: bool,
+    alt: bool,
     left_down: bool,
     drag: Option<(i32, i32, DragKind)>,
     /// The focused app owns the pointer (body click) until button-up.
@@ -139,6 +140,7 @@ impl Shell {
             pointer: (width as i32 / 2, height as i32 / 2),
             shift: false,
             ctrl: false,
+            alt: false,
             left_down: false,
             drag: None,
             app_capture: false,
@@ -150,11 +152,14 @@ impl Shell {
             pending: Vec::new(),
             svc_jobs: Vec::new(),
         };
-        shell.open(Box::new(crate::apps::terminal::TerminalApp::new()));
+        shell.open(Box::new(crate::apps::terminal::TerminalApp::new()), true);
         shell
     }
 
-    pub fn open(&mut self, app: Box<dyn App>) {
+    /// Add a window at the top of the z-order. `focus` gives it keyboard focus;
+    /// pass false to raise it without stealing focus from the current window
+    /// (e.g. an app a terminal's `run` spawned).
+    pub fn open(&mut self, app: Box<dyn App>, focus: bool) {
         let (pw, ph) = app.preferred_size(self.width, self.height);
         let n = self.windows.len() as i32;
         let x = (self.width - pw) / 2 + n * 32 - 48;
@@ -170,7 +175,9 @@ impl Shell {
             restore: None,
             hidden: false,
         });
-        self.focus = self.windows.len() - 1;
+        if focus {
+            self.focus = self.windows.len() - 1;
+        }
     }
 
     /// True while input arrived within the last 3 seconds.
@@ -259,6 +266,7 @@ impl Shell {
                 Event::Key { code, down } => match code {
                     keys::LSHIFT | keys::RSHIFT => self.shift = down,
                     keys::LCTRL => self.ctrl = down,
+                    keys::LALT | keys::RALT => self.alt = down,
                     _ if down => self.on_key_down(code),
                     _ => {}
                 },
@@ -452,6 +460,21 @@ impl Shell {
             .unwrap_or(0);
     }
 
+    /// Move focus to the next non-hidden window after the current one (wrapping)
+    /// and raise it to the top so it's visible. No-op with fewer than two.
+    fn cycle_focus(&mut self) {
+        let n = self.windows.len();
+        for step in 1..=n {
+            let i = (self.focus + step) % n;
+            if !self.windows[i].hidden {
+                if i != self.focus {
+                    self.bring_to_front(i);
+                }
+                return;
+            }
+        }
+    }
+
     fn zone_rect(&self, zone: SnapZone) -> Rect {
         let top = 16;
         let bottom = self.height - 100; // keep clear of the dock band
@@ -520,9 +543,9 @@ impl Shell {
             }
         }
         match name {
-            "terminal" => self.open(Box::new(crate::apps::terminal::TerminalApp::new())),
+            "terminal" => self.open(Box::new(crate::apps::terminal::TerminalApp::new()), true),
             "notes" => self.launch_app("edit", &[alloc::string::String::from("/notes.txt")]),
-            "monitor" => self.open(Box::new(crate::apps::monitor::MonitorApp::new())),
+            "monitor" => self.open(Box::new(crate::apps::monitor::MonitorApp::new()), true),
             // SDK apps, spawned from /apps (Phase 4: the launcher speaks
             // the same protocols as the terminal's `run`).
             "clock" | "solitaire" | "pixels" => self.launch_app(name, &[]),
@@ -563,7 +586,7 @@ impl Shell {
         ];
         match crate::obj::loader::spawn_with_grants("terminal".into(), &elf, &[], grants) {
             Ok((_p, tid, _main)) => {
-                crate::ui::shell::extern_app::register(shell_kern, "Terminal".into());
+                crate::ui::shell::extern_app::register(shell_kern, "Terminal".into(), true);
                 kprintln!("tinyos: uterm launched (thread {tid})");
             }
             Err(e) => kprintln!("uterm: spawn failed: {}", e.msg()),
@@ -628,7 +651,9 @@ impl Shell {
         if !self.pending.is_empty() {
             for p in core::mem::take(&mut self.pending) {
                 match extern_app::ExternApp::try_open(&p) {
-                    extern_app::OpenResult::Opened(app) => self.open(Box::new(app)),
+                    extern_app::OpenResult::Opened(app) => {
+                        self.open(Box::new(app), p.focus_on_open)
+                    }
                     extern_app::OpenResult::Waiting => self.pending.push(p),
                     extern_app::OpenResult::Done => {} // exited before opening
                 }
@@ -672,6 +697,12 @@ impl Shell {
     fn on_key_down(&mut self, code: u16) {
         const KEY_K: u16 = 37;
         const KEY_L: u16 = 38;
+        // Alt+Tab cycles keyboard focus between windows (and raises the target),
+        // giving a keyboard way back to a window that opened unfocused.
+        if self.alt && code == keys::TAB {
+            self.cycle_focus();
+            return;
+        }
         if self.ctrl {
             match code {
                 KEY_L => {

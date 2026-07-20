@@ -273,6 +273,22 @@ def main():
         time.sleep(0.5)
         step("shell alive after Ctrl+C", "echo aftertop", "[out] aftertop")
 
+        # 10b. Focus-steal guard: a windowed app launched from the shell must NOT
+        #      steal keyboard focus (regression guard for the exec-mint window
+        #      opening unfocused, kernel/src/obj/syscall.rs). `run pixels &` execs
+        #      pixels, which opens its own top-level window. Pre-fix that window
+        #      grabbed focus, so the NEXT command's keystrokes were routed to the
+        #      pixels window instead of the terminal (hence sh, hence serial) — and
+        #      `help` produced no output. Post-fix the terminal keeps focus, so the
+        #      keystrokes still reach sh and `help` mirrors its list to serial.
+        print("smoke: > run pixels &   (windowed app must not steal focus)")
+        qmp.type_line("run pixels &")
+        cur = serial.wait_for("] pixels &", args.step_timeout, cur)
+        time.sleep(1.2)                          # let pixels actually open its window
+        if serial.panic:
+            raise AssertionError("panic running a windowed app from the shell")
+        step("focus kept after windowed launch", "help", "[out] commands:")
+
         # 11. Launch path: the command palette (Ctrl+K) -> `uterm` -> Enter
         #     spawns the userspace terminal. It renders to its own window
         #     (serial can't see that), so this only proves the launch path

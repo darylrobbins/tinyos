@@ -73,7 +73,7 @@ impl SvcJob {
         };
         let app = crate::obj::loader::spawn(name.to_string(), &elf, argv, &grants)
             .map_err(|e| e.msg())?;
-        super::extern_app::register(app.shell, name.to_string());
+        super::extern_app::register(app.shell, name.to_string(), true);
         Ok(SvcJob {
             name: name.to_string(),
             process: app.process,

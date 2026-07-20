@@ -542,7 +542,9 @@ fn sys_process_exec(
     // Window: parent-requested AND app-declared → mint under the attested name.
     if flags & EXEC_REQUEST_WINDOW != 0 && crate::obj::loader::manifest(&elf).window {
         let (app_end, kern_end) = crate::obj::channel::create();
-        crate::ui::shell::extern_app::register(kern_end, name.clone());
+        // Don't steal focus: `sh` runs this app while you're typing in the
+        // terminal, so its window opens unfocused (Alt+Tab / click to reach it).
+        crate::ui::shell::extern_app::register(kern_end, name.clone(), false);
         grants.push((TAG_SHELL, Handle::new(Object::Channel(app_end), RIGHTS_ALL)));
     }
 

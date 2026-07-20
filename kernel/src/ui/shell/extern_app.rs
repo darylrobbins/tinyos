@@ -32,13 +32,21 @@ use abi::window::{
 pub struct PendingApp {
     pub shell: Arc<ChannelEnd>,
     pub name: String,
+    /// Take keyboard focus when the window opens. True for direct user
+    /// launches (dock/palette); false for windows a terminal's `run` spawns,
+    /// so opening an app doesn't steal focus from the terminal you're typing in.
+    pub focus_on_open: bool,
 }
 
 static SPAWN_QUEUE: Mutex<Vec<PendingApp>> = Mutex::new(Vec::new());
 
 /// Terminal side: register a spawned app so the shell can host its window.
-pub fn register(shell: Arc<ChannelEnd>, name: String) {
-    SPAWN_QUEUE.lock().push(PendingApp { shell, name });
+pub fn register(shell: Arc<ChannelEnd>, name: String, focus_on_open: bool) {
+    SPAWN_QUEUE.lock().push(PendingApp {
+        shell,
+        name,
+        focus_on_open,
+    });
 }
 
 /// Shell side: take newly-spawned apps awaiting their first `OPEN`.
