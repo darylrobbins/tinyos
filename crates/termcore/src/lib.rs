@@ -133,6 +133,10 @@ impl Term {
             }
             OP_SET_PROMPT if bytes.len() >= 8 => {
                 let count = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+                // Clamp against the actual buffer: each span is at least 8
+                // bytes (fg:u32 + len:u32), so a bogus/huge count can't
+                // trigger a giant allocation or over-iterate the parse loop.
+                let count = count.min(bytes.len() / 8);
                 let mut spans = Vec::with_capacity(count);
                 let mut o = 8usize;
                 for _ in 0..count {
@@ -385,6 +389,18 @@ mod tests {
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0], (String::from("meridian"), 0x11_2233));
         assert_eq!(spans[1], (String::from("> "), 0x44_5566));
+    }
+
+    #[test]
+    fn set_prompt_with_bogus_huge_count_does_not_overallocate_or_panic() {
+        let mut t = Term::new();
+        // Claims 0xFFFFFFFF spans but the body is empty — the clamped count
+        // must not drive Vec::with_capacity or the parse loop past what the
+        // buffer actually holds.
+        let mut b = OP_SET_PROMPT.to_le_bytes().to_vec();
+        b.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+        t.on_console_msg(&b);
+        assert_eq!(t.prompt().len(), 0);
     }
 
     #[test]

@@ -153,6 +153,7 @@ fn main(env: Env) -> i32 {
         let _ = wait_many(&mut items, uptime_us() + 50_000);
     }
 
+    let _ = proc::kill(child.thread_id);
     child.release();
     con_kern.close();
     0
