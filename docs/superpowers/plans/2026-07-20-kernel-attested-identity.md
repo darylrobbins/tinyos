@@ -23,7 +23,7 @@
 
 ## File structure
 
-- `crates/abi/src/syscall.rs` (modify) — `SYS_PROCESS_EXEC = 14`, `EXEC_REQUEST_WINDOW = 1`.
+- `crates/abi/src/syscall.rs` (modify) — `SYS_PROCESS_EXEC = 16`, `EXEC_REQUEST_WINDOW = 1`.
 - `kernel/src/obj/syscall.rs` (modify) — extract grant-move helper; add `sys_process_exec`; dispatch arm.
 - `apps/sdk/src/process.rs` (modify) — `exec(path, args, grants, want_window)`.
 - `apps/shell/src/main.rs` (modify) — `run` uses `process::exec`.
@@ -34,7 +34,7 @@
 ### Task 1: ABI — `SYS_PROCESS_EXEC` + flag
 
 **Files:**
-- Modify: `crates/abi/src/syscall.rs` (after `SYS_PROCESS_SPAWN: u64 = 13;` — note 14 is free, 15 is `SYS_MEMOBJ_UNMAP`)
+- Modify: `crates/abi/src/syscall.rs` (after `SYS_PROCESS_SPAWN: u64 = 13;` — 16 is free: 14 is reserved (thread_spawn), 15 is `SYS_MEMOBJ_UNMAP`)
 
 **Interfaces:**
 - Produces: `abi::syscall::{SYS_PROCESS_EXEC: u64 = 14, EXEC_REQUEST_WINDOW: u64 = 1}`.
@@ -47,7 +47,7 @@
 /// attesting identity from the resolved /apps basename. flags bit 0 =
 /// EXEC_REQUEST_WINDOW: mint a window under the attested identity (honored iff
 /// the app's manifest declares `window`).
-pub const SYS_PROCESS_EXEC: u64 = 14;
+pub const SYS_PROCESS_EXEC: u64 = 16;
 
 /// flags bit for SYS_PROCESS_EXEC: request a window for the child.
 pub const EXEC_REQUEST_WINDOW: u64 = 1;
