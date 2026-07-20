@@ -425,3 +425,9 @@ fn main(env: Env) -> i32 {
 }
 
 app!(main);
+
+// The shell: console I/O, broad fs (arbitrary user paths), and process control
+// including kill (Ctrl+C, shutdown/reboot). Its grants actually arrive as
+// explicit handles from the terminal that spawns it (SYS_PROCESS_SPAWN doesn't
+// consult the manifest), so this declaration documents intent + keeps it honest.
+tinyos_app::declare_caps!(b"console\nfs:/\nproc.kill");

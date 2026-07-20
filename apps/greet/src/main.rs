@@ -20,3 +20,6 @@ fn main(_env: Env) -> i32 {
 }
 
 app!(main);
+
+// Reads a line and prints — console only.
+tinyos_app::declare_caps!(b"console");

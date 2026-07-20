@@ -75,3 +75,7 @@ fn main(env: Env) -> i32 {
 }
 
 app!(main);
+
+// A windowed timer/clock: opens its window (env.shell); its arg is a seconds
+// count, not a file — no console/fs/proc.
+tinyos_app::declare_caps!(b"window");

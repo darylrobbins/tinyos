@@ -312,3 +312,6 @@ fn on_release(game: &mut Game, drag: &mut Option<Drag>, moves: &mut u32, x: i32,
 }
 
 app!(main);
+
+// A windowed game: only opens its window (env.shell), no console/fs/proc.
+tinyos_app::declare_caps!(b"window");

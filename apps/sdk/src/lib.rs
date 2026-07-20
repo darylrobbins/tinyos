@@ -60,8 +60,9 @@ pub struct CapsBlob<const N: usize> {
 /// Declare the capabilities this app needs, newline-separated:
 /// `console`, `window`, `proc`, `proc.kill` (advisory), `fs:self`
 /// (a private data dir), `fs:/shared/<dir>`. Spawners intersect these with
-/// their own policy. Declaring `b""` means "no capabilities at all";
-/// apps that don't invoke the macro get the legacy default grants.
+/// their own policy. The default is least-privilege: declaring `b""` — or not
+/// invoking the macro at all — grants the app NOTHING (the loader fails closed).
+/// Declare exactly what you use.
 ///
 /// ```ignore
 /// tinyos_app::declare_caps!(b"console\nwindow\nfs:self");

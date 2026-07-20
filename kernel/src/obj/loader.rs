@@ -77,9 +77,10 @@ fn abi_blob(elf: &[u8]) -> Option<&[u8]> {
 const MAX_CAPS_LEN: usize = 512;
 
 /// Capabilities an app declares in its `.tinyos_abi` stamp. Declarations are
-/// requests: each spawner intersects them with its own policy. An app with no
-/// caps blob (old SDK, or none declared) gets the legacy default so existing
-/// binaries keep running; an app that declares caps gets exactly those.
+/// requests: each spawner intersects them with its own policy. Absence is
+/// least-privilege: an app with no caps blob, or one that declares none, gets
+/// NOTHING (fails closed). Every in-tree app declares its caps via
+/// `declare_caps!`; forgetting to means the app is denied, not handed the world.
 pub struct Manifest {
     pub console: bool,
     pub window: bool,
@@ -91,29 +92,29 @@ pub struct Manifest {
 }
 
 impl Manifest {
-    fn legacy() -> Self {
+    /// The empty grant set — the default when nothing is declared.
+    fn none() -> Self {
         Manifest {
-            console: true,
-            window: true,
-            proc: true,
+            console: false,
+            window: false,
+            proc: false,
             proc_kill: false,
-            fs: alloc::vec![String::from("self")],
+            fs: Vec::new(),
         }
     }
 }
 
-/// Parse the app's declared caps, or the legacy default if none.
+/// Parse the app's declared caps; absence or malformation fails closed to none.
 pub fn manifest(elf: &[u8]) -> Manifest {
     let Some(blob) = abi_blob(elf) else {
-        return Manifest::legacy();
+        return Manifest::none();
     };
-    // The CAPS magic marks an explicit declaration; without it (legacy
-    // binaries: the stamp is followed by zero padding) apply the
-    // compatibility default. With it, parse exactly what's declared —
-    // `declare_caps!(b"")` means "no capabilities", and a malformed blob
-    // fails closed to that same empty grant set, never to legacy.
+    // The CAPS magic marks an explicit declaration; without it (a binary with
+    // no `declare_caps!`: the stamp is followed by zero padding) grant nothing.
+    // With it, parse exactly what's declared — `declare_caps!(b"")` means "no
+    // capabilities", and a malformed blob fails closed to that same empty set.
     if u32at(blob, 4) != Some(abi::bootstrap::CAPS_MAGIC) {
-        return Manifest::legacy();
+        return Manifest::none();
     }
     let caps = u32at(blob, 8)
         .map(|l| l as usize)

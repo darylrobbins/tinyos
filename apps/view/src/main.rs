@@ -98,3 +98,7 @@ fn main(env: Env) -> i32 {
 }
 
 app!(main);
+
+// A pager: prints/console-surface, and reads the user-given file path — so it
+// needs broad fs (the path is arbitrary, inherited from the launching shell).
+tinyos_app::declare_caps!(b"console\nfs:/");

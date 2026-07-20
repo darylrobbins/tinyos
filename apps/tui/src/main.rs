@@ -110,3 +110,6 @@ fn main(_env: Env) -> i32 {
 }
 
 app!(main);
+
+// Draws to a console text surface (open_surface) — console only.
+tinyos_app::declare_caps!(b"console");

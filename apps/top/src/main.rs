@@ -141,4 +141,6 @@ fn main(_env: Env) -> i32 {
 }
 
 app!(main);
-tinyos_app::declare_caps!(b"console\nwindow\nproc");
+// Draws to a console text surface (not a window) and reads/kills processes.
+// No `window` — it never opens one (declaring it only minted a phantom window).
+tinyos_app::declare_caps!(b"console\nproc.kill");
