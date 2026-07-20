@@ -36,14 +36,14 @@ fn dup(handle: u32) -> u32 {
     syscall2(SYS_HANDLE_DUP, handle as u64, RIGHTS_ALL as u64).value as u32
 }
 
-fn render(win: &mut Window, term: &mut Term, surf_va: Option<u64>) {
+fn render(win: &mut Window, term: &mut Term, surf: Option<(u64, usize, usize)>) {
     let (w, h) = (win.width as i32, win.height as i32);
     let mut back: Vec<u32> = vec![0; (win.width * win.height) as usize];
     let mut cv = Canvas::new(&mut back, w, h);
     cv.clear(BG);
 
-    if let (Some(s), Some(va)) = (term.surface(), surf_va) {
-        render_surface(&mut cv, s, va);
+    if let (Some(s), Some((va, cols, rows))) = (term.surface(), surf) {
+        render_surface(&mut cv, va, cols, rows, s.cursor);
         win.present_from(&back);
         return;
     }
@@ -74,14 +74,14 @@ fn render(win: &mut Window, term: &mut Term, surf_va: Option<u64>) {
     win.present_from(&back);
 }
 
-fn render_surface(cv: &mut Canvas, s: &termcore::SurfaceMeta, va: u64) {
+fn render_surface(cv: &mut Canvas, va: u64, cols: usize, rows: usize, cursor: (usize, usize, u32, bool)) {
     let cells = unsafe {
-        core::slice::from_raw_parts(va as *const abi::console::Cell, s.cols * s.rows)
+        core::slice::from_raw_parts(va as *const abi::console::Cell, cols * rows)
     };
     let mut buf = [0u8; 4];
-    for row in 0..s.rows {
-        for col in 0..s.cols {
-            let Some(r) = termcore::resolve_cell(&cells[row * s.cols + col], TX, BG) else {
+    for row in 0..rows {
+        for col in 0..cols {
+            let Some(r) = termcore::resolve_cell(&cells[row * cols + col], TX, BG) else {
                 continue; // WIDE_CONT
             };
             let x = (col * CELL_W as usize) as i32;
@@ -100,8 +100,8 @@ fn render_surface(cv: &mut Canvas, s: &termcore::SurfaceMeta, va: u64) {
     }
     // Cursor (matches kernel draw_cells shapes; no blink for simplicity — the
     // kernel blinks via caret_on, optional here).
-    let (crow, ccol, shape, visible) = s.cursor;
-    if visible && crow < s.rows && ccol < s.cols {
+    let (crow, ccol, shape, visible) = cursor;
+    if visible && crow < rows && ccol < cols {
         let x = (ccol * CELL_W as usize) as i32;
         let y = (crow * CELL_H as usize) as i32;
         let acc = (ACC & 0x00FF_FFFF) | 0x8000_0000;
@@ -153,7 +153,7 @@ fn main(env: Env) -> i32 {
 
     let mut term = Term::new();
     term.set_size(cols, rows);
-    let mut surf_va: Option<u64> = None;
+    let mut surf: Option<(u64, usize, usize)> = None; // (va, cols, rows) — the dims actually validated + mapped
     for m in term.take_outbound() {
         let _ = con_kern.send(&m, &[]);
     }
@@ -184,20 +184,22 @@ fn main(env: Env) -> i32 {
         while let Ok(msg) = con_kern.try_recv() {
             let op = msg.bytes.get(0..4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
             if op == Some(abi::console::OP_SURFACE_OPEN) && msg.bytes.len() >= 12 {
-                let cols = u32::from_le_bytes(msg.bytes[4..8].try_into().unwrap()) as u64;
-                let rows = u32::from_le_bytes(msg.bytes[8..12].try_into().unwrap()) as u64;
-                let need = cols * rows * 16;
-                if let (Some(&h), true) = (msg.handles.first(), need > 0) {
-                    if let Ok(sz) = memobj::size(h) {
-                        if need <= sz {
-                            if let Some(va) = surf_va.take() { memobj::unmap(va); }
-                            let len = (need + 0xFFF) & !0xFFF;
-                            if let Ok(va) = memobj::map(h, 0, len) { surf_va = Some(va); }
+                let cols = u32::from_le_bytes(msg.bytes[4..8].try_into().unwrap()) as usize;
+                let rows = u32::from_le_bytes(msg.bytes[8..12].try_into().unwrap()) as usize;
+                if (1..=1000).contains(&cols) && (1..=500).contains(&rows) {
+                    if let Some(&h) = msg.handles.first() {
+                        let need = (cols * rows * core::mem::size_of::<abi::console::Cell>()) as u64;
+                        if let Ok(sz) = memobj::size(h) {
+                            if need <= sz {
+                                if let Some((va, _, _)) = surf.take() { memobj::unmap(va); }
+                                let len = (need + 0xFFF) & !0xFFF;
+                                if let Ok(va) = memobj::map(h, 0, len) { surf = Some((va, cols, rows)); }
+                            }
                         }
                     }
                 }
             } else if op == Some(abi::console::OP_SURFACE_CLOSE) {
-                if let Some(va) = surf_va.take() { memobj::unmap(va); }
+                if let Some((va, _, _)) = surf.take() { memobj::unmap(va); }
             }
             term.on_console_msg(&msg.bytes);
         }
@@ -206,7 +208,7 @@ fn main(env: Env) -> i32 {
         }
 
         if term.dirty() {
-            render(&mut win, &mut term, surf_va);
+            render(&mut win, &mut term, surf);
             term.clear_dirty();
         }
 
