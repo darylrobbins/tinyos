@@ -4,13 +4,14 @@
 use crate::gfx::font::Fonts;
 use crate::gfx::surface::{argb, lerp, Surface};
 
+use super::icons::{self, Icon};
 use super::tokens::*;
 
-pub const APPS: [(&str, &str, u32); 4] = [
-    ("terminal", ">_", ACC),
-    ("notes", "N", HUE_AMBER),
-    ("monitor", "~", HUE_BLUE),
-    ("clock", "()", HUE_VIOLET),
+pub const APPS: [(&str, Icon, u32); 4] = [
+    ("terminal", Icon::Terminal, ACC),
+    ("notes", Icon::Notes, HUE_AMBER),
+    ("monitor", Icon::Monitor, HUE_BLUE),
+    ("clock", Icon::Clock, HUE_VIOLET),
 ];
 
 const TILE: i32 = 44;
@@ -37,7 +38,7 @@ fn tile_x(pill_x: i32, i: i32) -> i32 {
 
 pub fn draw(
     s: &mut Surface,
-    fonts: &mut Fonts,
+    _fonts: &mut Fonts,
     backdrop: &Surface,
     screen: (i32, i32),
     running: &[(&str, bool)],
@@ -45,7 +46,8 @@ pub fn draw(
     let (px, py, pw, ph) = pill_rect(screen);
     s.frosted_panel(backdrop, px, py, pw, ph, RADIUS_PILL, GLASS_TINT);
 
-    // Orb: teal-to-violet gradient tile with a soft teal glow.
+    // Orb: teal-to-violet gradient tile with a soft teal glow and a bold
+    // chevron prompt glyph.
     let ox = px + PAD;
     let oy = py + (ph - TILE) / 2;
     s.fill_rounded_rect(ox - 3, oy + 4, TILE + 6, TILE + 4, RADIUS_TILE + 3, argb(28, 0x5f, 0xd4, 0xc4));
@@ -54,22 +56,16 @@ pub fn draw(
         let inset = corner_inset(row, TILE, RADIUS_TILE);
         s.fill_rect(ox + inset, oy + row, TILE - 2 * inset, 1, c);
     }
-    let (gw, _) = fonts.ui_semibold.measure("*", 20.0);
-    fonts
-        .ui_semibold
-        .draw(s, "*", 20.0, ox + (TILE - gw) / 2, oy + 10, ORB_TX);
+    icons::draw(s, Icon::Orb, ox + TILE / 2, oy + TILE / 2, 22.0, ORB_TX);
 
     // Separator.
     s.fill_rect(px + PAD + TILE + 4, py + (ph - 34) / 2, 1, 34, STROKE);
 
-    for (i, (name, glyph, hue)) in APPS.iter().enumerate() {
+    for (i, (name, icon, hue)) in APPS.iter().enumerate() {
         let tx = tile_x(px, i as i32);
         let ty = py + (ph - TILE) / 2 - 2;
         s.fill_rounded_rect(tx, ty, TILE, TILE, RADIUS_TILE, CARD2);
-        let (gw, _) = fonts.mono.measure(glyph, 15.0);
-        fonts
-            .mono
-            .draw(s, glyph, 15.0, tx + (TILE - gw) / 2, ty + 12, *hue);
+        icons::draw(s, *icon, tx + TILE / 2, ty + TILE / 2, 22.0, *hue);
         if running.iter().any(|&(n, r)| n == *name && r) {
             s.fill_rounded_rect(tx + TILE / 2 - 2, py + ph - 9, 4, 4, 2, ACC);
         }

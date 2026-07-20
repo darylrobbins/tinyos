@@ -5,6 +5,7 @@ pub mod calc;
 pub mod extern_app;
 pub mod clockpill;
 pub mod dock;
+pub mod icons;
 pub mod lockscreen;
 pub mod palette;
 pub mod quick;
@@ -307,7 +308,8 @@ impl Shell {
         let (px, py) = self.pointer;
 
         if self.palette.open {
-            match self.palette.hit_test((px, py), (self.width, self.height)) {
+            let hit = self.palette.hit_test((px, py), (self.width, self.height));
+            match hit {
                 Some(LauncherHit::Suggestion(i)) => {
                     let cmd = palette::SUGGESTIONS[i].1;
                     let action = self.palette.submit_text(cmd);
@@ -322,6 +324,25 @@ impl Shell {
                 Some(LauncherHit::Lock) => {
                     self.palette.dismiss();
                     self.locked = true;
+                    return;
+                }
+                Some(LauncherHit::Restart) | Some(LauncherHit::ShutDown) => {
+                    // Only power down if the disk cache flushes cleanly, matching
+                    // the terminal's shutdown/reboot commands (a failed sync
+                    // could lose data, so leave the OS running in that case).
+                    let restart = matches!(hit, Some(LauncherHit::Restart));
+                    self.palette.dismiss();
+                    match crate::fs::sync() {
+                        Ok(()) => {
+                            kprintln!("tinyos: shell: filesystem synced, going down");
+                            if restart {
+                                crate::arch::reboot()
+                            } else {
+                                crate::arch::poweroff()
+                            }
+                        }
+                        Err(e) => kprintln!("tinyos: shell: sync failed ({e}), aborting power-off"),
+                    }
                     return;
                 }
                 Some(LauncherHit::Inside) => return,
@@ -792,17 +813,17 @@ fn draw_window(
     // Title row hairline.
     s.fill_rect(r.x + 1, r.y + TITLE_H, r.w - 2, 1, STROKE);
 
-    // Glyph in the app's hue, then the title.
+    // Vector icon in the app's hue, then the title.
     let entry = dock::APPS
         .iter()
         .find(|(n, _, _)| win.app.title().eq_ignore_ascii_case(n) || (*n == "clock" && win.app.title() == "Timer"));
     let hue = entry.map(|&(_, _, h)| h).unwrap_or(ACC);
-    // Prefer the dock's per-app glyph when the title matches a known app, so a
-    // hosted (userspace) window shows its real icon (e.g. the terminal's `>_`)
+    // Prefer the dock's per-app icon when the title matches a known app, so a
+    // hosted (userspace) window shows its real icon (e.g. the terminal chevron)
     // instead of the generic ExternApp placeholder; fall back otherwise.
-    let glyph = entry.map(|&(_, g, _)| g).unwrap_or_else(|| win.app.glyph());
-    fonts.mono.draw(s, glyph, 12.0, r.x + 16, r.y + 14, hue);
-    let mut gx = r.x + 16 + fonts.mono.measure(glyph, 12.0).0 + 10;
+    let icon = entry.map(|&(_, ic, _)| ic).unwrap_or_else(|| win.app.icon());
+    icons::draw(s, icon, r.x + 26, r.y + TITLE_H / 2, 18.0, hue);
+    let mut gx = r.x + 40;
     let title = alloc::string::String::from(win.app.title());
     // Hosted windows lead with their trusted process identity (semibold);
     // the app-claimed title follows dimmer, so no app can pose as another.
@@ -815,15 +836,15 @@ fn draw_window(
         fonts.ui_semibold.draw(s, &title, 13.0, gx, r.y + 13, TX);
     }
 
-    // Controls: - [] x (mono, dim).
-    for (c, glyph) in [
-        (Control::Minimize, "-"),
-        (Control::Maximize, "[]"),
-        (Control::Close, "x"),
+    // Controls: – □ ✕ (vector, dim; close brightens on the focused window).
+    for (c, ic) in [
+        (Control::Minimize, icons::Icon::Minimize),
+        (Control::Maximize, icons::Icon::Maximize),
+        (Control::Close, icons::Icon::Close),
     ] {
         let (cx, cy) = win.control_center(c);
-        let (gw, _) = fonts.mono.measure(glyph, 13.0);
-        fonts.mono.draw(s, glyph, 13.0, cx - gw / 2, cy - 9, TX3);
+        let color = if focused && c == Control::Close { TX2 } else { TX3 };
+        icons::draw(s, ic, cx, cy, 16.0, color);
     }
 
     // Resize grip affordance.

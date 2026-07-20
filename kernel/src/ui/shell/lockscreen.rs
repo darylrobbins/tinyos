@@ -21,16 +21,20 @@ pub fn draw(s: &mut Surface, fonts: &mut Fonts, wallpaper: &Surface, now: u64) {
     let (dw, _) = fonts.ui.measure(date, 17.0);
     fonts.ui.draw(s, date, 17.0, cx - dw / 2, h / 5 + 132, TX2);
 
-    // Gradient avatar circle with the user initial.
+    // Gradient avatar circle with the user initial. Anti-aliased edge (soft
+    // coverage falloff) blended over the wallpaper, matching the mockup's disc.
     let ay = h * 62 / 100;
     let r = 37;
-    for dy in -r..=r {
-        for dx in -r..=r {
-            let d2 = dx * dx + dy * dy;
-            if d2 <= r * r {
-                let t = (((dx + dy) + 2 * r) * 255 / (4 * r)) as u32;
-                let c = lerp(ACC, HUE_VIOLET, t.min(255));
-                s.pixels[((ay + dy) as usize) * s.width + (cx + dx) as usize] = c;
+    let rf = r as f32;
+    for dy in -(r + 1)..=(r + 1) {
+        for dx in -(r + 1)..=(r + 1) {
+            let dist = libm::sqrtf((dx * dx + dy * dy) as f32);
+            let cov = (rf + 0.5 - dist).clamp(0.0, 1.0);
+            if cov > 0.0 {
+                let t = (((dx + dy) + 2 * r) * 255 / (4 * r)).clamp(0, 255) as u32;
+                let c = lerp(ACC, HUE_VIOLET, t);
+                let a = (cov * 255.0) as u32;
+                s.put(cx + dx, ay + dy, (c & 0x00FF_FFFF) | a << 24);
             }
         }
     }

@@ -29,6 +29,9 @@ impl App for TerminalApp {
     fn glyph(&self) -> &str {
         ">_"
     }
+    fn icon(&self) -> crate::ui::shell::icons::Icon {
+        crate::ui::shell::icons::Icon::Terminal
+    }
 
     fn preferred_size(&self, _sw: i32, _sh: i32) -> (i32, i32) {
         (760, 500)

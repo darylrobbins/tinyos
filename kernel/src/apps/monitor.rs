@@ -102,6 +102,9 @@ impl App for MonitorApp {
     fn glyph(&self) -> &str {
         "~"
     }
+    fn icon(&self) -> crate::ui::shell::icons::Icon {
+        crate::ui::shell::icons::Icon::Monitor
+    }
 
     fn preferred_size(&self, _sw: i32, _sh: i32) -> (i32, i32) {
         (420, 430)
