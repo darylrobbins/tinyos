@@ -11,6 +11,7 @@ use alloc::vec;
 
 const FILE_DIR: u16 = 0x19;
 
+#[allow(dead_code)] // DMA status bit, kept for completeness alongside the others
 const DMA_ERROR: u32 = 1;
 const DMA_SELECT: u32 = 8;
 const DMA_WRITE: u32 = 16;

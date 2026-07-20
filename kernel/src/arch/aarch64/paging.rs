@@ -88,6 +88,7 @@ impl AddrSpace {
         (self.root as u64) | ((self.asid as u64) << 48)
     }
 
+    #[allow(dead_code)] // address-space id accessor, used by future TLB/ASID paths
     pub fn asid(&self) -> u16 {
         self.asid
     }
@@ -230,6 +231,7 @@ impl AddrSpace {
     }
 
     /// Tighten permissions on an existing mapping (e.g. make code RX->R).
+    #[allow(dead_code)] // permission tightening, used by future W^X enforcement
     pub fn protect(&mut self, va: u64, len: usize, flags: MapFlags) {
         let pages = len.div_ceil(FRAME_SIZE);
         for i in 0..pages {

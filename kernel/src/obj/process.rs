@@ -114,6 +114,7 @@ impl Process {
         super::wake_objects();
     }
 
+    #[allow(dead_code)] // process lookup by id, used by future proc-broker paths
     pub fn find(id: u32) -> Option<Arc<Process>> {
         PROCESSES.lock().iter().find(|p| p.id == id).cloned()
     }

@@ -96,6 +96,7 @@ impl Surface {
     }
 
     /// Vertical gradient over the given rect.
+    #[allow(dead_code)] // drawing helper kept for future surface work
     pub fn fill_gradient_v(&mut self, x: i32, y: i32, w: i32, h: i32, top: u32, bottom: u32) {
         let Some((x0, y0, x1, y1)) = self.clip(x, y, w, h) else {
             return;
@@ -160,7 +161,7 @@ impl Surface {
         let mut tmp = Surface::new(w, h);
         let mut out = Surface::new(w, h);
 
-        let mut pass = |src: &[u32], dst: &mut [u32], len: i32, stride: usize, line_base: usize| {
+        let pass = |src: &[u32], dst: &mut [u32], len: i32, stride: usize, line_base: usize| {
             let at = |i: i32| src[line_base + clamp(i, len) * stride];
             let (mut sr, mut sg, mut sb) = (0u32, 0u32, 0u32);
             for i in -r..=r {

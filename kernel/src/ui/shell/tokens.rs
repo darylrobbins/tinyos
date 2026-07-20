@@ -11,4 +11,5 @@ pub const TEXT_DIM: u32 = TX2;
 pub const ACCENT: u32 = ACC;
 pub const FIELD: u32 = BG;
 pub const RADIUS: i32 = RADIUS_WIN;
-pub const STATUS_H: i32 = 0; // no top bar in Meridian
+#[allow(dead_code)] // no top bar in Meridian, kept for layout math that may return
+pub const STATUS_H: i32 = 0;
