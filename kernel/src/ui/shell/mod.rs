@@ -698,8 +698,11 @@ impl Shell {
         const KEY_K: u16 = 37;
         const KEY_L: u16 = 38;
         // Alt+Tab cycles keyboard focus between windows (and raises the target),
-        // giving a keyboard way back to a window that opened unfocused.
-        if self.alt && code == keys::TAB {
+        // giving a keyboard way back to a window that opened unfocused. Suppress
+        // it mid-drag or while an app holds the pointer: both are keyed on
+        // self.focus, so switching focus under them would apply the drag to the
+        // wrong window or strand the captured app's button-up.
+        if self.alt && code == keys::TAB && self.drag.is_none() && !self.app_capture {
             self.cycle_focus();
             return;
         }
