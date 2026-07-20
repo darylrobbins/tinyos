@@ -8,6 +8,7 @@ pub mod memobj;
 pub mod objtest;
 pub mod process;
 pub mod procsrv;
+pub mod procserver;
 pub mod syscall;
 pub mod usertest;
 
