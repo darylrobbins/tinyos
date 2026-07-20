@@ -49,16 +49,20 @@ fn render(win: &mut Window, term: &mut Term, surf: Option<(u64, usize, usize)>) 
     }
 
     let rows = (h / CELL_H).max(1) as usize;
-    // Bottom row is reserved for the prompt + input line.
+    // Reserve one row so the prompt is always visible once scrollback fills up.
     let text_rows = rows.saturating_sub(1);
     let lines: Vec<_> = term.scrollback().collect();
     let start = lines.len().saturating_sub(text_rows);
-    for (i, line) in lines[start..].iter().enumerate() {
+    let shown = &lines[start..];
+    for (i, line) in shown.iter().enumerate() {
         cv.draw_mono_text(0, i as i32 * CELL_H, &line.text, line.color);
     }
 
-    // Prompt spans + input, on the bottom line.
-    let y = text_rows as i32 * CELL_H;
+    // Prompt + input flow immediately after the last scrollback line (matching
+    // the kernel terminal), not pinned to the window bottom. Once scrollback
+    // fills the view, `shown.len()` saturates at `text_rows`, so the prompt
+    // settles onto the reserved bottom row.
+    let y = shown.len() as i32 * CELL_H;
     let mut x = 0i32;
     for (text, color) in term.prompt() {
         cv.draw_mono_text(x, y, &text, color);

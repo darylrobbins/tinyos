@@ -540,9 +540,13 @@ fn sys_process_exec(
     let mut grants = take_grants(&p, grants_ptr, grant_count)?;
 
     // Window: parent-requested AND app-declared → mint under the attested name.
-    if flags & EXEC_REQUEST_WINDOW != 0 && crate::obj::loader::manifest(&elf).window {
+    let m = crate::obj::loader::manifest(&elf);
+    let windowed = flags & EXEC_REQUEST_WINDOW != 0 && m.window;
+    if windowed {
         let (app_end, kern_end) = crate::obj::channel::create();
-        crate::ui::shell::extern_app::register(kern_end, name.clone());
+        // Don't steal focus: `sh` runs this app while you're typing in the
+        // terminal, so its window opens unfocused (Alt+Tab / click to reach it).
+        crate::ui::shell::extern_app::register(kern_end, name.clone(), false);
         grants.push((TAG_SHELL, Handle::new(Object::Channel(app_end), RIGHTS_ALL)));
     }
 
@@ -560,7 +564,13 @@ fn sys_process_exec(
         let mh = t.insert(Handle::new(Object::Channel(main_peer), RIGHTS_ALL))?;
         (ph, mh)
     };
-    copy_out_u32s(out_ptr, &[ph, mh])?;
+    // out = [proc_h, main_h, detached]. `detached` = a pure-window app (declares
+    // `window`, not `console`): it runs in its own window with no tie to the
+    // launching console, so a shell can background it instead of blocking the
+    // prompt. A console app that also opens a surface (top, vi — `console` +
+    // `window`) keeps the console and must stay foreground, so it is NOT detached.
+    let detached = windowed && !m.console;
+    copy_out_u32s(out_ptr, &[ph, mh, detached as u32])?;
     Ok(tid as u64)
 }
 

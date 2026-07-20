@@ -273,6 +273,23 @@ def main():
         time.sleep(0.5)
         step("shell alive after Ctrl+C", "echo aftertop", "[out] aftertop")
 
+        # 10b. Windowed-launch guard, two regressions in one step. `run pixels`
+        #      (no `&`) execs a windowed app. It must:
+        #      (a) auto-background — a windowed app never uses this console, so sh
+        #          returns to the prompt instead of blocking on it (the `[N] &`
+        #          job line proves sh didn't wait); and
+        #      (b) not steal keyboard focus — the exec-minted window opens
+        #          unfocused, so the NEXT command's keystrokes still reach sh.
+        #      If either regressed, the follow-up `help` output never reaches
+        #      serial (sh is blocked, or the keys went to the pixels window).
+        print("smoke: > run pixels   (windowed app: auto-background, no focus steal)")
+        qmp.type_line("run pixels")
+        cur = serial.wait_for("] pixels &", args.step_timeout, cur)   # auto-backgrounded
+        time.sleep(1.2)                          # let pixels actually open its window
+        if serial.panic:
+            raise AssertionError("panic running a windowed app from the shell")
+        step("prompt live + focus kept after windowed launch", "help", "[out] commands:")
+
         # 11. Launch path: the command palette (Ctrl+K) -> `uterm` -> Enter
         #     spawns the userspace terminal. It renders to its own window
         #     (serial can't see that), so this only proves the launch path

@@ -707,8 +707,9 @@ impl Terminal {
         )
         .map_err(|e| e.msg())?;
 
-        // Hand the window channel to the compositor.
-        crate::ui::shell::extern_app::register(shell_kern, name.to_string());
+        // Hand the window channel to the compositor. Don't steal focus: you're
+        // typing in the terminal, so the app it runs opens unfocused.
+        crate::ui::shell::extern_app::register(shell_kern, name.to_string(), false);
 
         let job = RunningApp {
             name: name.to_string(),
