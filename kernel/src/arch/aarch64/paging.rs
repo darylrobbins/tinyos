@@ -9,7 +9,7 @@
 
 use alloc::vec::Vec;
 use core::arch::asm;
-use core::sync::atomic::{AtomicU16, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 
 use crate::mem::frames::{FRAME_SIZE, alloc_frames, free_frames};
 
@@ -122,6 +122,7 @@ impl AddrSpace {
     }
 
     fn page_desc(pa: usize, flags: MapFlags) -> u64 {
+        debug_assert!(!(flags.write && flags.exec), "W^X: writable+executable user page");
         let ap = if flags.write { AP_EL0_RW } else { AP_EL0_RO };
         let uxn = if flags.exec { 0 } else { ATTR_UXN };
         pa as u64
@@ -343,6 +344,21 @@ static NULL_L1: NullTable = NullTable([0; 4096]);
 
 static NORMAL_ATTR_IDX: AtomicU16 = AtomicU16::new(0xFFFF);
 
+/// FEAT_PAN present (detected once by the BSP in `init_cpu`).
+static HAS_PAN: AtomicBool = AtomicBool::new(false);
+
+/// Set PSTATE.PAN on the calling CPU if the feature exists. SCTLR.SPAN=0
+/// keeps it set from then on (every exception entry to EL1 re-sets it); this
+/// call covers the stretch of EL1 execution before the first exception. APs
+/// inherit SCTLR from the BSP's snapshot but boot with PAN clear, so each
+/// calls this from `ap_main`.
+pub fn enable_pan_this_cpu() {
+    if HAS_PAN.load(Ordering::Relaxed) {
+        // `msr pan, #1` — encoded raw so no target-feature gate is needed.
+        unsafe { asm!(".inst 0xd500419f", options(nomem, nostack)) };
+    }
+}
+
 /// MAIR index for Normal WB-WA memory (0xFF), located or installed by
 /// `init_cpu` on the BSP.
 fn normal_attr_idx() -> u8 {
@@ -392,12 +408,36 @@ pub fn init_cpu() {
         tcr |= 1 << 22; // A1: ASID from TTBR1
         asm!("msr tcr_el1, {0}", "isb", in(reg) tcr);
 
-        // SCTLR: SPAN=1 (leave PAN clear so syscalls can touch user pages),
-        // UCI/UCT/DZE=1 (EL0 cache ops, CTR_EL0, DC ZVA).
+        // PAN (FEAT_PAN, ARMv8.1): with it, a plain EL1 access to an
+        // EL0-accessible page faults, so a syscall can only reach user memory
+        // through the ldtr/sttr accessors in `uaccess` — a stray user pointer
+        // becomes a loud data abort instead of silent corruption. Runtime-
+        // detected: HVF `-cpu host` has it, the TCG cortex-a72 fallback
+        // (v8.0) doesn't. SCTLR.SPAN=0 makes every exception entry to EL1
+        // set PSTATE.PAN; without the feature keep SPAN=1 (its old value).
+        let mmfr1: u64;
+        asm!("mrs {0}, id_aa64mmfr1_el1", out(reg) mmfr1);
+        let has_pan = (mmfr1 >> 20) & 0xF != 0;
+        HAS_PAN.store(has_pan, Ordering::Relaxed);
+
+        // SCTLR: SPAN per above; UCI/UCT/DZE=1 (EL0 cache ops, CTR_EL0,
+        // DC ZVA).
         let mut sctlr: u64;
         asm!("mrs {0}, sctlr_el1", out(reg) sctlr);
-        sctlr |= (1 << 23) | (1 << 26) | (1 << 15) | (1 << 14);
+        sctlr |= (1 << 26) | (1 << 15) | (1 << 14);
+        if has_pan {
+            sctlr &= !(1 << 23);
+        } else {
+            sctlr |= 1 << 23;
+        }
         asm!("msr sctlr_el1, {0}", "isb", in(reg) sctlr);
+    }
+    kprintln!(
+        "tinyos: PAN {}",
+        if HAS_PAN.load(Ordering::Relaxed) { "enabled" } else { "unavailable (pre-v8.1 CPU)" }
+    );
+    enable_pan_this_cpu();
+    unsafe {
 
         // No stale TTBR1 walks can exist (EPD1 was set), but start clean.
         asm!("dsb ishst", "tlbi vmalle1", "dsb ish", "isb");
@@ -405,7 +445,9 @@ pub fn init_cpu() {
 }
 
 /// Boot-time smoke test: map a frame in a fresh space, write through the
-/// user VA from EL1, read it back, and check the physical frame saw it.
+/// user VA (via the unprivileged accessors — with PAN live a plain EL1
+/// store to an EL0 page would fault), read it back, and check the physical
+/// frame saw it.
 pub fn self_test() -> bool {
     let mut space = match AddrSpace::new() {
         Some(s) => s,
@@ -422,13 +464,14 @@ pub fn self_test() -> bool {
     {
         return false;
     }
+    const PAT: u64 = 0xDEAD_BEEF_CAFE_F00D;
     unsafe {
         asm!("msr ttbr1_el1, {0}", "isb", in(reg) space.ttbr1());
-        let p = va as *mut u64;
-        p.write_volatile(0xDEAD_BEEF_CAFE_F00D);
-        let via_va = p.read_volatile();
+        super::uaccess::copy_to_user(va, PAT.to_le_bytes().as_ptr(), 8);
+        let mut back = [0u8; 8];
+        super::uaccess::copy_from_user(back.as_mut_ptr(), va, 8);
         let via_pa = (frame as *const u64).read_volatile();
         asm!("msr ttbr1_el1, {0}", "isb", in(reg) null_ttbr1());
-        via_va == 0xDEAD_BEEF_CAFE_F00D && via_pa == 0xDEAD_BEEF_CAFE_F00D
+        u64::from_le_bytes(back) == PAT && via_pa == PAT
     }
 }

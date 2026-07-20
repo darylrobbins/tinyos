@@ -99,6 +99,7 @@ unsafe extern "C" {
 extern "C" fn ap_main(boot: &'static ApBoot) -> ! {
     let cpu = boot.cpu as usize;
     super::exceptions::install();
+    super::paging::enable_pan_this_cpu(); // SCTLR came from the BSP; PSTATE.PAN didn't
     super::gic::init_cpu(cpu);
     AP_ONLINE.fetch_add(1, Ordering::Release);
     kprintln!(

@@ -158,7 +158,9 @@ struct Segment {
 /// Segments may share a page (e.g. .rodata's tail and .bss's head), so the
 /// whole image is one contiguous frame block and permissions accumulate
 /// per page — a shared RO/RW page ends up writable (standard for merged
-/// ELF segments), which the fixed page granularity makes unavoidable.
+/// ELF segments). W^X is a hard invariant, though: any page that would
+/// accumulate write+exec fails the load. In-tree apps page-align their
+/// segments in link.ld, so nothing real is refused.
 fn load_image(elf: &[u8], aspace: &mut AddrSpace, abi_expected: u32) -> Result<u64, LoadError> {
     // ELF header.
     if elf.get(0..4) != Some(&[0x7F, b'E', b'L', b'F']) {
@@ -234,6 +236,12 @@ fn load_image(elf: &[u8], aspace: &mut AddrSpace, abi_expected: u32) -> Result<u
             page_exec[p as usize] |= s.exec;
             page_write[p as usize] |= s.write;
         }
+    }
+
+    // W^X: `process_spawn` takes arbitrary ELF bytes from userspace; a
+    // hostile image must not be able to demand a writable+executable page.
+    if (0..pages).any(|p| page_write[p] && page_exec[p]) {
+        return Err(LoadError::BadImage);
     }
 
     // Visibility to a user thread on another core, then map each page with
