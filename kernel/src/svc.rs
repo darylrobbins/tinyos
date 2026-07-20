@@ -40,23 +40,27 @@ pub fn pump() {
 }
 
 /// Mint a fresh FS connection for an in-kernel spawner (direct, same-thread).
+#[allow(dead_code)] // broker-based spawning is deferred (powerbox not yet wired)
 pub fn mint_fs() -> Handle {
     FS_SERVER.lock().as_mut().expect("svc::init before spawn").mint()
 }
 
 /// Mint a fresh PROC connection for an in-kernel spawner.
+#[allow(dead_code)] // broker-based spawning is deferred (powerbox not yet wired)
 pub fn mint_proc() -> Handle {
     PROC_SERVER.lock().as_mut().expect("svc::init before spawn").mint()
 }
 
 /// A transferable handle to the FS broker client end — grant to a userspace
 /// spawner so it can mint connections for its own children.
+#[allow(dead_code)] // broker-based spawning is deferred (powerbox not yet wired)
 pub fn fs_broker_handle() -> Handle {
     let c = FS_BROKER_CLIENT.lock().as_ref().expect("svc::init").clone();
     Handle::new(Object::Channel(c), RIGHTS_ALL)
 }
 
 /// A transferable handle to the PROC broker client end.
+#[allow(dead_code)] // broker-based spawning is deferred (powerbox not yet wired)
 pub fn proc_broker_handle() -> Handle {
     let c = PROC_BROKER_CLIENT.lock().as_ref().expect("svc::init").clone();
     Handle::new(Object::Channel(c), RIGHTS_ALL)

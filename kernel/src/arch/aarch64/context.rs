@@ -32,7 +32,7 @@ impl Context {
         let mut c = Self::empty();
         c.sp = stack_top & !0xF; // AAPCS: 16-byte aligned
         c.x19 = entry as usize as u64;
-        c.x30 = thread_trampoline as usize as u64;
+        c.x30 = thread_trampoline as *const () as u64;
         c
     }
 }

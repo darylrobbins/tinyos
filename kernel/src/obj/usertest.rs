@@ -203,7 +203,7 @@ fn run_hello_once() {
     };
     const OP_WRITE: u32 = 1;
     let deadline = crate::arch::timer::uptime_us() + 3_000_000;
-    let mut drain = |console: &alloc::sync::Arc<super::channel::ChannelEnd>| {
+    let drain = |console: &alloc::sync::Arc<super::channel::ChannelEnd>| {
         while let Ok(msg) = console.recv() {
             if msg.bytes.len() >= 4
                 && u32::from_le_bytes(msg.bytes[0..4].try_into().unwrap()) == OP_WRITE

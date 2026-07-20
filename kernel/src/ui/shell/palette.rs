@@ -22,6 +22,7 @@ pub const SUGGESTIONS: [(&str, &str, Icon); 3] = [
 const FOOTER_BTNS: [(&str, i32); 3] = [("Lock", 56), ("Restart", 76), ("Shut down", 92)];
 const FOOTER_GAP: i32 = 8;
 
+#[allow(dead_code)] // some actions/payloads not yet wired to a caller
 pub enum Action {
     None,
     Dismiss,

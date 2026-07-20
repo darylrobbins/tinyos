@@ -140,12 +140,12 @@ pub fn start_secondary_cpus() {
             ttbr1: super::paging::null_ttbr1(),
         }));
         clean_dcache(boot as *const ApBoot as usize, core::mem::size_of::<ApBoot>());
-        clean_dcache(ap_entry as usize, 128);
+        clean_dcache(ap_entry as *const () as usize, 128);
 
         let ret = psci_call(
             PSCI_CPU_ON64,
             cpu as u64, // target MPIDR: Aff0 = cpu on virt
-            ap_entry as usize as u64,
+            ap_entry as *const () as u64,
             boot as *const ApBoot as u64,
         );
         if ret != 0 {

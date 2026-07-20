@@ -32,6 +32,7 @@ struct Line {
 #[derive(Clone, Copy)]
 pub enum Caret {
     /// Thin vertical bar (insert-style, for the editor).
+    #[allow(dead_code)] // editor mode not yet wired up
     Bar,
     /// Full-cell block (overwrite-style, for the terminal prompt).
     Block,
@@ -84,6 +85,7 @@ impl TextView {
     }
 
     /// Editor: the whole buffer is editable, no scrollback, no prompt.
+    #[allow(dead_code)] // editor mode not yet wired up
     pub fn editor(default_color: u32, caret_color: u32) -> Self {
         Self {
             lines: vec![Line {
@@ -107,6 +109,7 @@ impl TextView {
     // --- content -----------------------------------------------------------
 
     /// Replace the whole buffer with `text` split on '\n' (editor load).
+    #[allow(dead_code)] // editor mode not yet wired up
     pub fn set_text(&mut self, text: &str) {
         self.lines = text
             .split('\n')
@@ -198,6 +201,7 @@ impl TextView {
     }
 
     /// The full editable buffer joined with '\n' (editor save).
+    #[allow(dead_code)] // editor mode not yet wired up
     pub fn to_string(&self) -> String {
         let mut out = String::new();
         for (i, line) in self.lines.iter().enumerate().skip(self.edit_floor) {
@@ -210,6 +214,7 @@ impl TextView {
     }
 
     /// Cursor position as 1-based (line, col) within the editable region.
+    #[allow(dead_code)] // editor mode not yet wired up
     pub fn cursor(&self) -> (usize, usize) {
         (self.cur_line - self.edit_floor + 1, self.cur_col + 1)
     }
@@ -221,6 +226,7 @@ impl TextView {
         s.char_indices().nth(col).map(|(i, _)| i).unwrap_or(s.len())
     }
 
+    #[allow(dead_code)] // editor mode not yet wired up
     fn clamp_col(&mut self) {
         self.cur_col = self.cur_col.min(self.lines[self.cur_line].text.chars().count());
     }
@@ -232,6 +238,7 @@ impl TextView {
     }
 
     /// Split the active line at the cursor into two editable lines (editor).
+    #[allow(dead_code)] // editor mode not yet wired up
     pub fn split_line(&mut self) {
         let bc = self.byte_index(self.cur_line, self.cur_col);
         let rest = self.lines[self.cur_line].text.split_off(bc);
@@ -267,6 +274,7 @@ impl TextView {
         self.cur_col = (self.cur_col + 1).min(self.lines[self.cur_line].text.chars().count());
     }
 
+    #[allow(dead_code)] // editor mode not yet wired up
     pub fn up(&mut self) {
         if self.cur_line > self.edit_floor {
             self.cur_line -= 1;
@@ -274,6 +282,7 @@ impl TextView {
         }
     }
 
+    #[allow(dead_code)] // editor mode not yet wired up
     pub fn down(&mut self) {
         if self.cur_line + 1 < self.lines.len() {
             self.cur_line += 1;

@@ -25,7 +25,7 @@ impl Context {
         let mut c = Self::empty();
         // Push the trampoline as the `ret` target of the first switch_to.
         let sp = (stack_top & !0xF) - 8;
-        unsafe { (sp as *mut u64).write(thread_trampoline as usize as u64) };
+        unsafe { (sp as *mut u64).write(thread_trampoline as *const () as u64) };
         c.rsp = sp;
         c.r12 = entry as usize as u64;
         c
