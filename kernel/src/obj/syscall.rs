@@ -540,7 +540,8 @@ fn sys_process_exec(
     let mut grants = take_grants(&p, grants_ptr, grant_count)?;
 
     // Window: parent-requested AND app-declared → mint under the attested name.
-    if flags & EXEC_REQUEST_WINDOW != 0 && crate::obj::loader::manifest(&elf).window {
+    let windowed = flags & EXEC_REQUEST_WINDOW != 0 && crate::obj::loader::manifest(&elf).window;
+    if windowed {
         let (app_end, kern_end) = crate::obj::channel::create();
         // Don't steal focus: `sh` runs this app while you're typing in the
         // terminal, so its window opens unfocused (Alt+Tab / click to reach it).
@@ -562,7 +563,10 @@ fn sys_process_exec(
         let mh = t.insert(Handle::new(Object::Channel(main_peer), RIGHTS_ALL))?;
         (ph, mh)
     };
-    copy_out_u32s(out_ptr, &[ph, mh])?;
+    // out = [proc_h, main_h, windowed]. The window flag lets a shell auto-
+    // background windowed apps (they don't use the console, so foreground would
+    // pointlessly block the prompt on a GUI window).
+    copy_out_u32s(out_ptr, &[ph, mh, windowed as u32])?;
     Ok(tid as u64)
 }
 

@@ -13,6 +13,10 @@ pub struct Child {
     pub proc_h: u32,
     /// Parent end of the child's main channel; close when done.
     pub main_h: u32,
+    /// The kernel minted a window for this child (exec only). A shell uses this
+    /// to auto-background windowed apps — they don't touch the console, so
+    /// blocking the prompt on them would strand a GUI window.
+    pub windowed: bool,
 }
 
 /// Spawn `elf` with `args` and explicit `grants` (tag, handle) — granted
@@ -53,7 +57,8 @@ pub fn spawn(elf: &[u8], args: &[&str], grants: &[(u32, u32)]) -> Result<Child, 
     syscall1(SYS_MEMOBJ_UNMAP, va);
     syscall1(SYS_HANDLE_CLOSE, mem);
     match r.ok() {
-        Ok(tid) => Ok(Child { thread_id: tid as u32, proc_h: out[0], main_h: out[1] }),
+        // spawn never mints a window (raw ELF, unattested identity).
+        Ok(tid) => Ok(Child { thread_id: tid as u32, proc_h: out[0], main_h: out[1], windowed: false }),
         Err(st) => Err(st),
     }
 }
@@ -78,7 +83,8 @@ pub fn exec(path: &str, args: &[&str], grants: &[(u32, u32)], want_window: bool)
         gr.extend_from_slice(&h.to_le_bytes());
     }
     let flags = if want_window { EXEC_REQUEST_WINDOW } else { 0 };
-    let mut out = [0u32; 2];
+    // out = [proc_h, main_h, windowed]; the kernel writes all three.
+    let mut out = [0u32; 3];
     let r = syscall6(
         SYS_PROCESS_EXEC,
         rec.as_ptr() as u64,
@@ -89,7 +95,12 @@ pub fn exec(path: &str, args: &[&str], grants: &[(u32, u32)], want_window: bool)
         flags,
     );
     match r.ok() {
-        Ok(tid) => Ok(Child { thread_id: tid as u32, proc_h: out[0], main_h: out[1] }),
+        Ok(tid) => Ok(Child {
+            thread_id: tid as u32,
+            proc_h: out[0],
+            main_h: out[1],
+            windowed: out[2] != 0,
+        }),
         Err(st) => Err(st),
     }
 }
