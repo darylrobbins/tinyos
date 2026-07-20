@@ -275,6 +275,18 @@ def main():
             raise AssertionError("panic after launching uterm")
         print("smoke: uterm launched cleanly")
 
+        # Run a full-screen surface app (top) inside the userspace terminal and
+        # quit it. Renders to uterm's window (not serial), so we only assert the
+        # surface host path doesn't panic/wedge.
+        print("smoke: > (in uterm) run top")
+        qmp.type_line("run top")
+        time.sleep(1.5)                 # let top open its surface + render frames
+        qmp.key(["q"])                  # top quits on 'q' (apps/top/src/main.rs:110)
+        time.sleep(0.6)
+        if serial.panic:
+            raise AssertionError("panic hosting a surface app in uterm")
+        print("smoke: surface app hosted in uterm cleanly")
+
         # 12. Durability: the file must survive a real sync+reboot. `reboot`
         #     syncs then PSCI-resets; QEMU restarts the same process in place,
         #     so we wait for a second boot and read the file back.

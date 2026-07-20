@@ -19,6 +19,12 @@ let font = CTFontCreateWithGraphicsFont(cgFont, px, nil, nil)
 let pad = 2
 let ascent = Int(round(CTFontGetAscent(font)))
 let descent = Int(round(CTFontGetDescent(font)))
+// Every glyph is rasterized into the SAME vertical frame (a full line box with
+// the baseline at a fixed row), so `oy` is constant across all glyphs. Deriving
+// oy from per-glyph ink bounds (as a proportional UI font can) causes 1px
+// vertical jitter between letters (e.g. GeistMono 'u' tops 1px below 'n'),
+// which is invisible in prose but glaring in a monospace terminal grid.
+let cellH = ascent + descent // == LINE_H
 
 func line(_ text: String) -> CTLine {
     let attr = [
@@ -28,9 +34,12 @@ func line(_ text: String) -> CTLine {
     return CTLineCreateWithAttributedString(CFAttributedStringCreate(nil, text as CFString, attr)!)
 }
 
+/// Rasterize into a `w × cellH` box with the baseline at a fixed row `descent`
+/// from the bottom (== `ascent` from the top). Only the horizontal extent is
+/// per-glyph; vertical placement is identical for every glyph.
 func rasterize(_ l: CTLine, _ bounds: CGRect) -> (Int, Int, [UInt8]) {
     let w = Int(ceil(bounds.width)) + 2 * pad
-    let h = Int(ceil(bounds.height)) + 2 * pad
+    let h = cellH
     var buf = [UInt8](repeating: 0, count: w * h)
     buf.withUnsafeMutableBytes { p in
         let ctx = CGContext(data: p.baseAddress, width: w, height: h,
@@ -40,7 +49,9 @@ func rasterize(_ l: CTLine, _ bounds: CGRect) -> (Int, Int, [UInt8]) {
         ctx.setAllowsAntialiasing(true)
         ctx.setShouldSmoothFonts(false)
         ctx.setFillColor(gray: 1.0, alpha: 1.0)
-        ctx.textPosition = CGPoint(x: -bounds.minX + CGFloat(pad), y: -bounds.minY + CGFloat(pad))
+        // CoreGraphics is bottom-up: baseline `descent` px above the bottom
+        // edge puts it `ascent` px below the top edge, for all glyphs.
+        ctx.textPosition = CGPoint(x: -bounds.minX + CGFloat(pad), y: CGFloat(descent))
         CTLineDraw(l, ctx)
     }
     return (w, h, buf)
@@ -77,7 +88,9 @@ for code in 32...126 {
     }
     let (w, h, buf) = rasterize(l, bounds)
     let ox = Int(floor(bounds.minX)) - pad
-    let oy = Int(ceil(bounds.maxY)) + pad
+    // Constant baseline: the bitmap is a full line box with the baseline at
+    // `ascent` from the top, so every glyph shares oy — no vertical jitter.
+    let oy = ascent
     sdk += "static \(name): UiGlyph = UiGlyph { w: \(w), h: \(h), ox: \(ox), oy: \(oy), adv: \(advance), data: &[\(bytes(buf))] };\n"
 }
 sdk += "\n/// Printable ASCII 32..=126.\npub static GLYPHS: [&UiGlyph; 95] = [" + names.joined(separator: ", ") + "];\n"

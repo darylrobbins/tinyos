@@ -17,8 +17,8 @@ use alloc::vec::Vec;
 
 use abi::console::{
     INPUT_MODE_KEYS, INPUT_MODE_LINES, OP_CHAR, OP_CLEAR, OP_HELLO, OP_HELLO_ACK, OP_INPUT_LINE,
-    OP_KEY, OP_RESIZE, OP_SET_FOREGROUND, OP_SET_INPUT_MODE, OP_SET_PROMPT, OP_WRITE,
-    OP_WRITE_STYLED,
+    OP_KEY, OP_RESIZE, OP_SET_FOREGROUND, OP_SET_INPUT_MODE, OP_SET_PROMPT, OP_SURFACE_CLOSE,
+    OP_SURFACE_CURSOR, OP_SURFACE_OPEN, OP_SURFACE_PRESENT, OP_WRITE, OP_WRITE_STYLED,
 };
 use abi::keys;
 
@@ -35,6 +35,52 @@ const SCROLLBACK_CAP: usize = 400;
 pub struct Line {
     pub text: String,
     pub color: u32,
+}
+
+/// Full-screen cell surface a hosted app (vi/top) opened. Pure meta — the
+/// cell bytes live in the app's MemObj, mapped and read by `apps/terminal`.
+pub struct SurfaceMeta {
+    pub cols: usize,
+    pub rows: usize,
+    /// (row, col, shape, visible) from OP_SURFACE_CURSOR.
+    pub cursor: (usize, usize, u32, bool),
+}
+
+/// Draw parameters for one cell. `None` = skip (a WIDE_CONT continuation).
+pub struct Resolved {
+    pub glyph: Option<char>,
+    pub fg: u32,
+    pub bg: Option<u32>,
+    pub wide: bool,
+    pub underline: bool,
+}
+
+/// Resolve a Cell to draw params, matching kernel draw_cells: alpha-0 colors
+/// fall back to theme; INVERSE swaps fg/bg (bg default = theme_bg); DIM halves
+/// fg; WIDE = 2 cells; WIDE_CONT is skipped; whitespace/NUL glyphs draw nothing.
+pub fn resolve_cell(cell: &abi::console::Cell, theme_fg: u32, theme_bg: u32) -> Option<Resolved> {
+    use abi::console::{ATTR_DIM, ATTR_INVERSE, ATTR_UNDERLINE, ATTR_WIDE, ATTR_WIDE_CONT};
+    if cell.attrs & ATTR_WIDE_CONT != 0 {
+        return None;
+    }
+    let mut fg = if cell.fg >> 24 == 0 { theme_fg } else { cell.fg };
+    let mut bg = if cell.bg >> 24 == 0 { None } else { Some(cell.bg) };
+    if cell.attrs & ATTR_INVERSE != 0 {
+        let old_fg = fg;
+        fg = bg.unwrap_or(theme_bg);
+        bg = Some(old_fg);
+    }
+    if cell.attrs & ATTR_DIM != 0 {
+        fg = (fg >> 1) & 0x007F_7F7F | 0xFF00_0000;
+    }
+    let glyph = char::from_u32(cell.glyph).filter(|c| !c.is_whitespace() && *c != '\0');
+    Some(Resolved {
+        glyph,
+        fg,
+        bg,
+        wide: cell.attrs & ATTR_WIDE != 0,
+        underline: cell.attrs & ATTR_UNDERLINE != 0,
+    })
 }
 
 /// Pure state of the terminal's line world: scrollback, the line editor,
@@ -55,6 +101,7 @@ pub struct Term {
     rows: usize,
     out: Vec<Vec<u8>>,
     dirty: bool,
+    surface: Option<SurfaceMeta>,
 }
 
 impl Default for Term {
@@ -78,6 +125,7 @@ impl Term {
             rows: 0,
             out: Vec::new(),
             dirty: false,
+            surface: None,
         }
     }
 
@@ -167,18 +215,61 @@ impl Term {
             }
             OP_SET_INPUT_MODE if bytes.len() >= 8 => {
                 self.mode = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+                // Re-arm RESIZE so a newly-foregrounded app (vi/top) learns the dims.
+                self.queue_resize();
+                // LINES and a full-screen surface are mutually exclusive: returning to
+                // LINES tears down a surface a child left behind (self-heal).
+                if self.mode == INPUT_MODE_LINES {
+                    self.surface = None;
+                }
+                self.dirty = true;
             }
             OP_SET_FOREGROUND if bytes.len() >= 8 => {
                 self.foreground_tid = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
             }
-            // SURFACE_*/LIVE_* and anything else are out of scope for the
-            // line-world subset (SP1a) — ignored.
+            OP_SURFACE_OPEN if bytes.len() >= 12 => {
+                let cols = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+                let rows = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+                self.surface = Some(SurfaceMeta { cols, rows, cursor: (0, 0, 0, false) });
+                // The kernel forces a fresh RESIZE on surface open so the child
+                // learns the dims; mirror it by re-queuing from our stored
+                // window cell dims.
+                self.queue_resize();
+                self.dirty = true;
+            }
+            OP_SURFACE_PRESENT => {
+                // The pixel re-read is apps/terminal's job; just mark dirty.
+                self.dirty = true;
+            }
+            OP_SURFACE_CURSOR if bytes.len() >= 20 => {
+                if let Some(s) = self.surface.as_mut() {
+                    let f = |o: usize| u32::from_le_bytes(bytes[o..o + 4].try_into().unwrap());
+                    s.cursor = (f(4) as usize, f(8) as usize, f(12), f(16) != 0);
+                }
+                self.dirty = true;
+            }
+            OP_SURFACE_CLOSE => {
+                self.surface = None;
+                self.mode = INPUT_MODE_LINES; // self-heal to line world
+                self.dirty = true;
+            }
+            // LIVE_* and anything else are out of scope for the line-world
+            // subset — ignored.
             _ => {}
         }
     }
 
     fn is_raw(&self) -> bool {
-        self.mode == INPUT_MODE_KEYS
+        self.mode == INPUT_MODE_KEYS || self.surface.is_some()
+    }
+
+    /// Queue an OP_RESIZE with the current window cell dims (stored by
+    /// `set_size`).
+    fn queue_resize(&mut self) {
+        let mut b = OP_RESIZE.to_le_bytes().to_vec();
+        b.extend_from_slice(&(self.cols as u32).to_le_bytes());
+        b.extend_from_slice(&(self.rows as u32).to_le_bytes());
+        self.out.push(b);
     }
 
     /// LINES-mode prompt spans: an explicit `OP_SET_PROMPT` wins; otherwise
@@ -272,10 +363,7 @@ impl Term {
         }
         self.cols = cols;
         self.rows = rows;
-        let mut b = OP_RESIZE.to_le_bytes().to_vec();
-        b.extend_from_slice(&(cols as u32).to_le_bytes());
-        b.extend_from_slice(&(rows as u32).to_le_bytes());
-        self.out.push(b);
+        self.queue_resize();
     }
 
     /// The foreground child tid the app should target for Ctrl+C (0 = none).
@@ -316,15 +404,25 @@ impl Term {
     pub fn cursor(&self) -> usize {
         self.cursor
     }
+
+    /// The currently open full-screen surface, if any.
+    pub fn surface(&self) -> Option<&SurfaceMeta> {
+        self.surface.as_ref()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use abi::console::{
-        OP_CHAR, OP_CLEAR, OP_HELLO_ACK, OP_INPUT_LINE, OP_RESIZE, OP_SET_FOREGROUND,
-        OP_SET_PROMPT, OP_WRITE_STYLED, INPUT_MODE_KEYS,
+        Cell, OP_CHAR, OP_CLEAR, OP_HELLO_ACK, OP_INPUT_LINE, OP_RESIZE, OP_SET_FOREGROUND,
+        OP_SET_PROMPT, OP_SURFACE_CLOSE, OP_SURFACE_OPEN, OP_WRITE_STYLED, ATTR_DIM,
+        ATTR_INVERSE, ATTR_UNDERLINE, ATTR_WIDE, ATTR_WIDE_CONT, INPUT_MODE_KEYS,
     };
+
+    fn cell(glyph: char, fg: u32, bg: u32, attrs: u16) -> Cell {
+        Cell { glyph: glyph as u32, fg, bg, attrs, _pad: 0 }
+    }
 
     fn styled(fg: u32, s: &str) -> alloc::vec::Vec<u8> {
         let mut b = OP_WRITE_STYLED.to_le_bytes().to_vec();
@@ -437,6 +535,7 @@ mod tests {
     fn keys_mode_char_queues_op_char() {
         let mut t = Term::new();
         t.on_console_msg(&set_input_mode_msg(INPUT_MODE_KEYS));
+        let _ = t.take_outbound(); // drain the mode-switch's re-armed RESIZE
         t.on_char('x');
         let out = t.take_outbound();
         assert_eq!(out.len(), 1);
@@ -519,5 +618,98 @@ mod tests {
         // Oldest 10 lines evicted; the retained window starts at "10".
         assert_eq!(lines[0].text, "10");
         assert_eq!(lines[399].text, "409");
+    }
+
+    #[test]
+    fn resolve_default_colors() {
+        let r = resolve_cell(&cell('a', 0, 0, 0), 0xFF111111, 0xFF222222).unwrap();
+        assert_eq!(r.fg, 0xFF111111); // alpha-0 fg -> theme_fg
+        assert_eq!(r.bg, None); // alpha-0 bg -> None
+        assert_eq!(r.glyph, Some('a'));
+    }
+    #[test]
+    fn resolve_explicit_and_inverse() {
+        let r = resolve_cell(&cell('x', 0xFFAAAAAA, 0xFFBBBBBB, ATTR_INVERSE), 0xFFFFFFFF, 0xFF000000)
+            .unwrap();
+        assert_eq!(r.fg, 0xFFBBBBBB); // fg <- old bg
+        assert_eq!(r.bg, Some(0xFFAAAAAA)); // bg <- old fg
+    }
+    #[test]
+    fn resolve_dim_and_wide_and_underline() {
+        let r = resolve_cell(
+            &cell('m', 0xFFFFFFFF, 0, ATTR_DIM | ATTR_WIDE | ATTR_UNDERLINE),
+            0xFF888888,
+            0xFF000000,
+        )
+        .unwrap();
+        assert_eq!(r.fg, (0xFFFFFFFF >> 1) & 0x007F_7F7F | 0xFF00_0000);
+        assert!(r.wide && r.underline);
+    }
+    #[test]
+    fn resolve_wide_cont_skipped() {
+        assert!(resolve_cell(&cell('\0', 0, 0, ATTR_WIDE_CONT), 0xFF111111, 0xFF222222).is_none());
+    }
+    #[test]
+    fn resolve_whitespace_glyph_none() {
+        assert_eq!(resolve_cell(&cell(' ', 0, 0, 0), 0xFF111111, 0xFF222222).unwrap().glyph, None);
+    }
+    #[test]
+    fn surface_open_sets_meta_forces_raw_and_requeues_resize() {
+        let mut t = Term::new();
+        t.set_size(80, 24);
+        let _ = t.take_outbound(); // drain the set_size RESIZE
+        let mut m = OP_SURFACE_OPEN.to_le_bytes().to_vec();
+        m.extend_from_slice(&40u32.to_le_bytes());
+        m.extend_from_slice(&12u32.to_le_bytes());
+        t.on_console_msg(&m);
+        assert!(t.surface().is_some());
+        let s = t.surface().unwrap();
+        assert_eq!((s.cols, s.rows), (40, 12));
+        // a RESIZE was re-queued with the window dims (80x24)
+        let out = t.take_outbound();
+        assert_eq!(u32::from_le_bytes(out[0][0..4].try_into().unwrap()), OP_RESIZE);
+        // raw input: a char now forwards as OP_CHAR (not local edit)
+        t.on_char('q');
+        let out = t.take_outbound();
+        assert_eq!(u32::from_le_bytes(out[0][0..4].try_into().unwrap()), abi::console::OP_CHAR);
+    }
+    #[test]
+    fn set_input_mode_keys_requeues_resize() {
+        let mut t = Term::new();
+        t.set_size(80, 24);
+        let _ = t.take_outbound(); // drain the set_size RESIZE
+        t.on_console_msg(&set_input_mode_msg(INPUT_MODE_KEYS));
+        let out = t.take_outbound();
+        assert_eq!(out.len(), 1);
+        assert_eq!(u32::from_le_bytes(out[0][0..4].try_into().unwrap()), OP_RESIZE);
+    }
+
+    #[test]
+    fn set_input_mode_lines_clears_open_surface() {
+        let mut t = Term::new();
+        t.set_size(80, 24);
+        let mut m = OP_SURFACE_OPEN.to_le_bytes().to_vec();
+        m.extend_from_slice(&40u32.to_le_bytes());
+        m.extend_from_slice(&12u32.to_le_bytes());
+        t.on_console_msg(&m);
+        assert!(t.surface().is_some());
+        t.on_console_msg(&set_input_mode_msg(INPUT_MODE_LINES));
+        assert!(t.surface().is_none());
+    }
+
+    #[test]
+    fn surface_close_restores_line_world() {
+        let mut t = Term::new();
+        t.set_size(80, 24);
+        let mut m = OP_SURFACE_OPEN.to_le_bytes().to_vec();
+        m.extend_from_slice(&40u32.to_le_bytes());
+        m.extend_from_slice(&12u32.to_le_bytes());
+        t.on_console_msg(&m);
+        t.on_console_msg(&OP_SURFACE_CLOSE.to_le_bytes());
+        assert!(t.surface().is_none());
+        // back to LINES: a char edits locally (no outbound OP_CHAR)
+        let _ = t.take_outbound();
+        t.on_char('a');
+        assert_eq!(t.input(), "a");
     }
 }
