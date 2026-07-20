@@ -36,6 +36,11 @@ pub const EXEC_REQUEST_WINDOW: u64 = 1;
 /// Unmap a memobj mapping by the vaddr `memobj_map` returned.
 pub const SYS_MEMOBJ_UNMAP: u64 = 15;
 
+/// Echo a string to serial as `[out] …` when the smoke-test mirror is on
+/// (a kernel-side no-op otherwise). Lets the userspace terminal feed the
+/// headless harness the same output the in-kernel terminal used to mirror.
+pub const SYS_DEBUG_MIRROR: u64 = 17;
+
 // Status codes.
 pub const ST_OK: u32 = 0;
 pub const ST_BAD_HANDLE: u32 = 1;
