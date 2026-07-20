@@ -103,6 +103,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "termcore"
+version = "0.1.0"
+dependencies = [
+ "tinyos-abi",
+]
+
+[[package]]
+name = "terminal"
+version = "0.1.0"
+dependencies = [
+ "termcore",
+ "tinyos-abi",
+ "tinyos-app",
+]
+
+[[package]]
 name = "textui"
 version = "0.1.0"
 dependencies = [

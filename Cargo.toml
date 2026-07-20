@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["kernel", "crates/abi", "crates/textui", "crates/tinyfs", "crates/vicore", "tools/mkfs-tinyfs"]
+members = ["kernel", "crates/abi", "crates/textui", "crates/tinyfs", "crates/vicore", "crates/termcore", "tools/mkfs-tinyfs"]
 
 [profile.release]
 lto = true

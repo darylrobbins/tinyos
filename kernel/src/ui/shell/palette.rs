@@ -130,9 +130,10 @@ impl Palette {
             return Action::None;
         }
         match cmd.as_str() {
-            "terminal" | "notes" | "monitor" | "clock" | "solitaire" | "pixels" => {
+            "terminal" | "uterm" | "notes" | "monitor" | "clock" | "solitaire" | "pixels" => {
                 Action::Open(match cmd.as_str() {
                     "terminal" => "terminal",
+                    "uterm" => "uterm",
                     "notes" => "notes",
                     "monitor" => "monitor",
                     "solitaire" => "solitaire",
