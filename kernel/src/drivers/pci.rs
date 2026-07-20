@@ -44,6 +44,7 @@ impl PciDevice {
     }
 
     /// Firmware-programmed legacy interrupt line (PCI config 0x3C).
+    #[allow(dead_code)] // read on x86 only; kept for the aarch64 legacy-IRQ path
     pub fn interrupt_line(&self) -> u8 {
         self.read8(0x3C)
     }
@@ -57,6 +58,7 @@ impl PciDevice {
     /// Mask legacy INTx (command bit 10). A polled device must not leave a
     /// level-triggered line asserted: nobody reads its ISR to deassert, and
     /// the shared PCI IRQ would storm as soon as interrupts are enabled.
+    #[allow(dead_code)] // for polled devices once shared INTx wiring lands
     pub fn disable_intx(&self) {
         let cmd = self.read16(0x04);
         self.write16(0x04, cmd | (1 << 10));

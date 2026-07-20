@@ -22,6 +22,7 @@ pub struct FbInfo {
 unsafe impl Send for FbInfo {}
 
 impl FbInfo {
+    #[allow(dead_code)] // framebuffer-format-aware pixel packing, used by future gfx paths
     pub fn pack(&self, r: u8, g: u8, b: u8) -> u32 {
         match self.format {
             FbFormat::Rgbx => (r as u32) | (g as u32) << 8 | (b as u32) << 16,

@@ -8,6 +8,7 @@ pub struct MapFlags {
     pub exec: bool,
 }
 
+#[allow(dead_code)] // x86 paging is a stub; kept to mirror the aarch64 AddrSpace API
 pub const USER_BASE: u64 = 0;
 pub const APP_IMAGE_BASE: u64 = 0;
 
@@ -35,6 +36,7 @@ impl AddrSpace {
 
     pub fn own_block(&mut self, _pa: usize, _pages: usize) {}
 
+    #[allow(dead_code)] // x86 paging is a stub; mirrors the aarch64 AddrSpace API
     pub fn protect(&mut self, _va: u64, _len: usize, _f: MapFlags) {}
 
     pub fn alloc_va(&mut self, _len: usize) -> u64 {

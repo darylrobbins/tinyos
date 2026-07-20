@@ -100,6 +100,7 @@ fn user_trampoline() {
 /// Requeue the current (user) thread from the EL0 preemption path. Unlike
 /// `yield_now` this never opens an IRQ service window — we're already in
 /// one — and leaves kill handling to the trap tail.
+#[allow(dead_code)] // driven by the aarch64 EL0 timer trap; unused on x86
 pub fn preempt_from_user() {
     let me = current();
     arch::irq::note_busy(cpu_id());
@@ -267,6 +268,10 @@ fn finish_switch() {
     }
 }
 
+// `fn()` isn't a C type, but this is only ever called from our own asm
+// trampoline with a Rust fn pointer — the C ABI is what the trampoline speaks,
+// not a real FFI boundary.
+#[allow(improper_ctypes_definitions)]
 #[unsafe(no_mangle)]
 extern "C" fn rust_thread_start(entry: fn()) -> ! {
     finish_switch();

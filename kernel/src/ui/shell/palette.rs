@@ -17,6 +17,7 @@ pub const SUGGESTIONS: [(&str, &str); 3] = [
     ("Calculate  = 240/8", "= 240/8"),
 ];
 
+#[allow(dead_code)] // some actions/payloads not yet wired to a caller
 pub enum Action {
     None,
     Dismiss,

@@ -65,13 +65,13 @@ macro_rules! handler {
         extern "x86-interrupt" fn h(frame: StackFrame) {
             report($vec, 0, &frame);
         }
-        h as u64
+        h as *const () as u64
     }};
     ($vec:literal, err) => {{
         extern "x86-interrupt" fn h(frame: StackFrame, error: u64) {
             report($vec, error, &frame);
         }
-        h as u64
+        h as *const () as u64
     }};
 }
 
@@ -133,12 +133,12 @@ pub fn install() {
         for (entry, &h) in idt.iter_mut().zip(handlers.iter()) {
             entry.set(h, cs);
         }
-        idt[super::apic::VEC_TIMER as usize].set(timer_gate as u64, cs);
+        idt[super::apic::VEC_TIMER as usize].set(timer_gate as *const () as u64, cs);
         for v in super::apic::VEC_INPUT_BASE..super::apic::VEC_INPUT_BASE + 8 {
-            idt[v as usize].set(input_gate as u64, cs);
+            idt[v as usize].set(input_gate as *const () as u64, cs);
         }
-        idt[super::apic::VEC_IPI as usize].set(ipi_gate as u64, cs);
-        idt[0xFF].set(spurious_gate as u64, cs);
+        idt[super::apic::VEC_IPI as usize].set(ipi_gate as *const () as u64, cs);
+        idt[0xFF].set(spurious_gate as *const () as u64, cs);
         let idtr = Idtr {
             limit: (size_of::<[Entry; 256]>() - 1) as u16,
             base: idt.as_ptr() as u64,

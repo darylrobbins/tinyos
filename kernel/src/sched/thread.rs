@@ -20,6 +20,7 @@ pub enum Class {
     Idle = 0,
     Normal = 1,
     Interactive = 2,
+    #[allow(dead_code)] // reserved scheduling class, not yet assigned to any thread
     Realtime = 3,
 }
 
