@@ -15,6 +15,7 @@
 extern crate alloc;
 
 pub mod alloc_impl;
+pub mod broker;
 pub mod channel;
 pub mod console;
 pub mod entry;
