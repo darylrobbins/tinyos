@@ -125,10 +125,12 @@ own window as `"Terminal"` directly. The terminal keeps spawning `sh` as it does
 ## Security properties
 
 - **Identity is attested by the filesystem.** A window's trusted name is the
-  basename of the `/apps/…` binary the kernel resolved. To make a window claim
-  `"Terminal"`, an attacker must place a binary at that identity in `/apps` —
-  which requires FS-write, itself a capability. The bar rises from "free string,
-  zero cost" (parent-asserted) to "control a binary at that path."
+  basename of the `/apps/…` binary the kernel resolved. Exec is **confined to the
+  flat `/apps` namespace** (`path` must equal `/apps/<name>`, so `/apps/../evil`
+  and trailing-slash tricks are rejected). To make a window claim `"Terminal"`,
+  an attacker must place a real binary at `/apps/Terminal` — which requires
+  FS-write, itself a capability. The bar rises from "free string, zero cost"
+  (parent-asserted) to "control a binary in `/apps`."
 - **No new ambient authority.** The parent still delegates all handle grants;
   the kernel only *names* the process and mints the one window the parent asked
   for and the child declared. The window-mint is gated by
