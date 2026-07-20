@@ -28,9 +28,15 @@ SP1b is full-screen surfaces only. Live regions (`OP_LIVE_*`) and the window bro
 
 ## Detailed design
 
-### Kernel — `SYS_MEMOBJ_SIZE`
+### No kernel change — `SYS_MEMOBJ_SIZE` already exists
 
-A new syscall returning the byte size of a MemObj handle the caller holds (any rights). Mirrors the kernel terminal's `mem.size()` validation (`term/mod.rs:907`) so the userspace terminal can reject a surface whose declared `cols*rows*16` exceeds the actual MemObj. Add the ABI constant (`crates/abi/src/syscall.rs`), the kernel handler (`kernel/src/obj/syscall.rs`), and an SDK wrapper (`apps/sdk/src/...` — e.g. `memobj::size(handle) -> Result<u64,u32>` or a `syscall` helper). Trivial, arch-neutral.
+Correction from the original draft: `SYS_MEMOBJ_SIZE` is **already** in the ABI
+(`crates/abi/src/syscall.rs`, value 9) with a kernel handler
+(`kernel/src/obj/syscall.rs::sys_memobj_size`). So SP1b needs **no kernel
+change at all** — it is entirely userspace. The terminal calls the existing
+syscall (via a thin SDK `memobj::size` wrapper) to validate that a child's
+declared `cols*rows*16 <= memobj_size` before mapping, matching the kernel
+terminal's `mem.size()` check.
 
 ### `termcore` — surface meta + raw-input clause + cell resolver (pure, host-tested)
 
@@ -73,7 +79,7 @@ Resize: the kernel forces a fresh `OP_RESIZE` when a surface opens (`sent_size=(
 - **`termcore` host tests:** `resolve_cell` (all attribute branches), the `is_raw()` surface clause, surface meta set/update/clear + mode reset on close, `OP_RESIZE` re-arm on surface open. Under `make test`.
 - **Manual QEMU (`make run`):** launch `uterm`, run `vi /etc/x` (or any file) — confirm the full-screen editor renders in the mono font with a cursor, typing edits, `:q` returns to the shell prompt; run `top` — confirm the live table renders and refreshes; confirm colors/inverse (e.g. `top` header) look right.
 - **Automated smoke:** extend the launch-path step — after launching `uterm`, drive `sh`-in-`uterm` to `run top` (or `vi`), wait, then quit, asserting no kernel panic and the machine stays live (heartbeat). This proves the surface host path doesn't wedge/fault, even though the rendered cells aren't serial-visible.
-- **Both arches:** `cargo check` aarch64 + x86_64 (the `SYS_MEMOBJ_SIZE` handler must compile on both).
+- **Both arches:** SP1b touches no kernel code, so both kernel targets are unaffected; still run `cargo check` aarch64 + x86_64 once as a guard. The new work is the aarch64-only apps workspace + host-tested `termcore`.
 
 ## Risks
 
