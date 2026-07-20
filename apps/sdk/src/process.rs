@@ -58,6 +58,42 @@ pub fn spawn(elf: &[u8], args: &[&str], grants: &[(u32, u32)]) -> Result<Child, 
     }
 }
 
+/// Exec a `/apps/…`-style path. The KERNEL loads it (attesting identity from
+/// the path) and delegates `grants` unchanged. `want_window` asks the kernel to
+/// mint a window under the attested identity (honored iff the app declares
+/// `window`). The child sees `args` as its argv (the path is kernel-only).
+pub fn exec(path: &str, args: &[&str], grants: &[(u32, u32)], want_window: bool) -> Result<Child, u32> {
+    // argv record: argv[0] = path (kernel reads it), then the child's args.
+    let argc = 1 + args.len();
+    let mut rec = (argc as u32).to_le_bytes().to_vec();
+    rec.extend_from_slice(&(path.len() as u32).to_le_bytes());
+    rec.extend_from_slice(path.as_bytes());
+    for a in args {
+        rec.extend_from_slice(&(a.len() as u32).to_le_bytes());
+        rec.extend_from_slice(a.as_bytes());
+    }
+    let mut gr: Vec<u8> = Vec::with_capacity(grants.len() * 8);
+    for (tag, h) in grants {
+        gr.extend_from_slice(&tag.to_le_bytes());
+        gr.extend_from_slice(&h.to_le_bytes());
+    }
+    let flags = if want_window { EXEC_REQUEST_WINDOW } else { 0 };
+    let mut out = [0u32; 2];
+    let r = syscall6(
+        SYS_PROCESS_EXEC,
+        rec.as_ptr() as u64,
+        rec.len() as u64,
+        gr.as_ptr() as u64,
+        grants.len() as u64,
+        out.as_mut_ptr() as u64,
+        flags,
+    );
+    match r.ok() {
+        Ok(tid) => Ok(Child { thread_id: tid as u32, proc_h: out[0], main_h: out[1] }),
+        Err(st) => Err(st),
+    }
+}
+
 impl Child {
     /// Block until the child exits, then release its handles.
     pub fn wait(self) {
