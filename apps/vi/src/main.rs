@@ -141,3 +141,7 @@ fn main(env: Env) -> i32 {
 }
 
 app!(main);
+
+// A console-surface editor: reads and writes the user-given file path, so it
+// needs broad fs (arbitrary path) plus the console. No window.
+tinyos_app::declare_caps!(b"console\nfs:/");

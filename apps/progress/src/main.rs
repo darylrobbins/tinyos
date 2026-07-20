@@ -62,3 +62,6 @@ fn main(_env: Env) -> i32 {
 }
 
 app!(main);
+
+// Prints and drives a console live-region (open_live) — console only.
+tinyos_app::declare_caps!(b"console");
