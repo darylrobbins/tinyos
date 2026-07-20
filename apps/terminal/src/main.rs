@@ -213,6 +213,12 @@ fn main(env: Env) -> i32 {
             }
             term.on_console_msg(&msg.bytes);
         }
+        // Echo any newly-frozen scrollback lines to serial for the smoke
+        // harness. `debug::mirror` is a kernel no-op unless smoke mode is on,
+        // so this costs one syscall per output line only in headless runs.
+        for line in term.take_mirror() {
+            tinyos_app::debug::mirror(&line);
+        }
         if term.surface().is_none() {
             if let Some((va, _, _)) = surf.take() {
                 memobj::unmap(va);
