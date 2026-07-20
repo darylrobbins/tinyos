@@ -24,13 +24,14 @@ use crate::mem::frames::FRAME_SIZE;
 // The ABI constants live in the shared `abi` crate (crates/abi), consumed by
 // kernel and SDK alike; existing `crate::obj::syscall::*` paths keep working.
 pub use abi::syscall::{
-    ABI_VERSION, ST_ACCESS_DENIED, ST_BAD_HANDLE, ST_BUFFER_TOO_SMALL, ST_INVALID_ARGS, ST_KILLED,
-    ST_LIMIT_EXCEEDED, ST_NOT_SUPPORTED, ST_NO_MEMORY, ST_OK, ST_PEER_CLOSED, ST_SHOULD_WAIT,
-    ST_TIMED_OUT, ST_WRONG_TYPE, SYS_ABI_VERSION, SYS_CHANNEL_CREATE, SYS_CHANNEL_RECV,
-    SYS_CHANNEL_SEND, SYS_CLOCK_UPTIME, SYS_HANDLE_CLOSE, SYS_HANDLE_DUP, SYS_LOG,
-    SYS_MEMOBJ_CREATE, SYS_MEMOBJ_MAP, SYS_MEMOBJ_SIZE, SYS_MEMOBJ_UNMAP, SYS_PROCESS_EXIT,
-    SYS_PROCESS_SPAWN, SYS_WAIT_MANY,
+    ABI_VERSION, EXEC_REQUEST_WINDOW, ST_ACCESS_DENIED, ST_BAD_HANDLE, ST_BUFFER_TOO_SMALL,
+    ST_INVALID_ARGS, ST_KILLED, ST_LIMIT_EXCEEDED, ST_NOT_SUPPORTED, ST_NO_MEMORY, ST_OK,
+    ST_PEER_CLOSED, ST_SHOULD_WAIT, ST_TIMED_OUT, ST_WRONG_TYPE, SYS_ABI_VERSION,
+    SYS_CHANNEL_CREATE, SYS_CHANNEL_RECV, SYS_CHANNEL_SEND, SYS_CLOCK_UPTIME, SYS_HANDLE_CLOSE,
+    SYS_HANDLE_DUP, SYS_LOG, SYS_MEMOBJ_CREATE, SYS_MEMOBJ_MAP, SYS_MEMOBJ_SIZE,
+    SYS_MEMOBJ_UNMAP, SYS_PROCESS_EXEC, SYS_PROCESS_EXIT, SYS_PROCESS_SPAWN, SYS_WAIT_MANY,
 };
+use abi::bootstrap::TAG_SHELL;
 
 const LOG_MAX: u64 = 4096;
 const MAX_WAIT_ITEMS: u64 = 32;
@@ -52,6 +53,9 @@ pub fn dispatch(sysno: u64, args: [u64; 6]) -> (u32, u64) {
         SYS_MEMOBJ_UNMAP => sys_memobj_unmap(args[0]),
         SYS_PROCESS_SPAWN => {
             sys_process_spawn(args[0], args[1], args[2], args[3], args[4], args[5])
+        }
+        SYS_PROCESS_EXEC => {
+            sys_process_exec(args[0], args[1], args[2], args[3], args[4], args[5])
         }
         SYS_PROCESS_EXIT => exit_current(args[0] as u32 as i32),
         SYS_CLOCK_UPTIME => Ok(crate::arch::timer::uptime_us()),
@@ -349,6 +353,45 @@ fn sys_memobj_map(hv: u64, offset: u64, len: u64) -> SysResult {
     Ok(va)
 }
 
+/// Move `grant_count` (tag, handle) pairs out of process `p`'s handle table,
+/// requiring RIGHT_TRANSFER, with full rollback on any failure. The caller
+/// then hands the returned Vec to loader::spawn_with_grants.
+fn take_grants(
+    p: &Arc<Process>,
+    grants_ptr: u64,
+    grant_count: u64,
+) -> Result<Vec<(u32, Handle)>, u32> {
+    let graw = copy_in(grants_ptr, grant_count * 8)?;
+    let mut grants: Vec<(u32, Handle)> = Vec::new();
+    let mut taken: Vec<(u32, u32)> = Vec::new(); // (hv, tag) for rollback
+    let mut t = p.handles.lock();
+    for i in 0..grant_count as usize {
+        let tag = u32::from_le_bytes(graw[i * 8..i * 8 + 4].try_into().unwrap());
+        let hv = u32::from_le_bytes(graw[i * 8 + 4..i * 8 + 8].try_into().unwrap());
+        match t.take(hv) {
+            Ok(h) if h.rights & RIGHT_TRANSFER != 0 => {
+                taken.push((hv, tag));
+                grants.push((tag, h));
+            }
+            Ok(h) => {
+                // No TRANSFER right: roll everything back.
+                t.insert_back(hv, h);
+                for ((hv2, _), (_, h2)) in taken.iter().zip(grants.drain(..)) {
+                    t.insert_back(*hv2, h2);
+                }
+                return Err(ST_ACCESS_DENIED);
+            }
+            Err(e) => {
+                for ((hv2, _), (_, h2)) in taken.iter().zip(grants.drain(..)) {
+                    t.insert_back(*hv2, h2);
+                }
+                return Err(e);
+            }
+        }
+    }
+    Ok(grants)
+}
+
 fn sys_process_spawn(
     elf_h: u64,
     argv_ptr: u64,
@@ -409,36 +452,7 @@ fn sys_process_spawn(
     }
 
     // Grants: (tag, handle) pairs; handles move out of the caller's table.
-    let graw = copy_in(grants_ptr, grant_count * 8)?;
-    let mut grants: Vec<(u32, Handle)> = Vec::new();
-    let mut taken: Vec<(u32, u32)> = Vec::new(); // (hv, tag) for rollback
-    {
-        let mut t = p.handles.lock();
-        for i in 0..grant_count as usize {
-            let tag = u32::from_le_bytes(graw[i * 8..i * 8 + 4].try_into().unwrap());
-            let hv = u32::from_le_bytes(graw[i * 8 + 4..i * 8 + 8].try_into().unwrap());
-            match t.take(hv) {
-                Ok(h) if h.rights & RIGHT_TRANSFER != 0 => {
-                    taken.push((hv, tag));
-                    grants.push((tag, h));
-                }
-                Ok(h) => {
-                    // No TRANSFER right: roll everything back.
-                    t.insert_back(hv, h);
-                    for ((hv2, _), (_, h2)) in taken.iter().zip(grants.drain(..)) {
-                        t.insert_back(*hv2, h2);
-                    }
-                    return Err(ST_ACCESS_DENIED);
-                }
-                Err(e) => {
-                    for ((hv2, _), (_, h2)) in taken.iter().zip(grants.drain(..)) {
-                        t.insert_back(*hv2, h2);
-                    }
-                    return Err(e);
-                }
-            }
-        }
-    }
+    let grants = take_grants(&p, grants_ptr, grant_count)?;
 
     let name = argv.first().cloned().unwrap_or_else(|| String::from("app"));
     let (child, tid, main_peer) =
@@ -447,6 +461,89 @@ fn sys_process_spawn(
             Err(_) => return Err(ST_INVALID_ARGS), // grants are consumed; load failed
         };
 
+    let (ph, mh) = {
+        let mut t = p.handles.lock();
+        let ph = t.insert(Handle::new(
+            Object::Process(child),
+            RIGHT_WAIT | RIGHT_DUP | RIGHT_TRANSFER,
+        ))?;
+        let mh = t.insert(Handle::new(Object::Channel(main_peer), RIGHTS_ALL))?;
+        (ph, mh)
+    };
+    copy_out_u32s(out_ptr, &[ph, mh])?;
+    Ok(tid as u64)
+}
+
+fn sys_process_exec(
+    argv_ptr: u64,
+    argv_len: u64,
+    grants_ptr: u64,
+    grant_count: u64,
+    out_ptr: u64,
+    flags: u64,
+) -> SysResult {
+    const MAX_ARGV: u64 = 4096;
+    const MAX_ARGS: u32 = 16;
+    const MAX_GRANTS: u64 = 8;
+    if argv_len > MAX_ARGV || grant_count > MAX_GRANTS {
+        return Err(ST_INVALID_ARGS);
+    }
+    let p = cur_proc()?;
+
+    // argv record: u32 argc, then per arg u32 len + utf8. argv[0] = path.
+    let record = copy_in(argv_ptr, argv_len)?;
+    let u32at = |o: usize| -> Result<u32, u32> {
+        record
+            .get(o..o + 4)
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+            .ok_or(ST_INVALID_ARGS)
+    };
+    let argc = u32at(0)?;
+    if argc == 0 || argc > MAX_ARGS {
+        return Err(ST_INVALID_ARGS);
+    }
+    let mut all: Vec<String> = Vec::with_capacity(argc as usize);
+    let mut off = 4usize;
+    for _ in 0..argc {
+        let len = u32at(off)? as usize;
+        off += 4;
+        let bytes = record.get(off..off + len).ok_or(ST_INVALID_ARGS)?;
+        all.push(core::str::from_utf8(bytes).map_err(|_| ST_INVALID_ARGS)?.into());
+        off += len;
+    }
+    let path = all[0].clone();
+    let child_argv: Vec<String> = all[1..].to_vec();
+
+    // Kernel-attested identity: the resolved path's basename.
+    let name = String::from(
+        path.rsplit('/')
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&path),
+    );
+
+    // The KERNEL reads the app (ambient /apps, like SvcJob) — this is the
+    // attestation: identity comes from what the kernel resolved, not a claim.
+    let elf = match crate::fs::read("/", &path) {
+        Ok(e) => e,
+        Err(_) => return Err(ST_INVALID_ARGS), // missing/unreadable app
+    };
+
+    // Authority: move the caller's grants, unchanged.
+    let mut grants = take_grants(&p, grants_ptr, grant_count)?;
+
+    // Window: parent-requested AND app-declared → mint under the attested name.
+    if flags & EXEC_REQUEST_WINDOW != 0 && crate::obj::loader::manifest(&elf).window {
+        let (app_end, kern_end) = crate::obj::channel::create();
+        crate::ui::shell::extern_app::register(kern_end, name.clone());
+        grants.push((TAG_SHELL, Handle::new(Object::Channel(app_end), RIGHTS_ALL)));
+    }
+
+    let (child, tid, main_peer) =
+        match crate::obj::loader::spawn_with_grants(name, &elf, &child_argv, grants) {
+            Ok(r) => r,
+            Err(_) => return Err(ST_INVALID_ARGS),
+        };
     let (ph, mh) = {
         let mut t = p.handles.lock();
         let ph = t.insert(Handle::new(
