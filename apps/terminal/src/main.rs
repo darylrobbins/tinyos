@@ -114,7 +114,7 @@ fn render_surface(cv: &mut Canvas, va: u64, cols: usize, rows: usize, cursor: (u
 }
 
 fn main(env: Env) -> i32 {
-    let mut win = match Window::open(env.shell, WIDTH, HEIGHT, "terminal") {
+    let mut win = match Window::open(env.shell, WIDTH, HEIGHT, "Terminal") {
         Ok(w) => w,
         Err(_) => return 1,
     };

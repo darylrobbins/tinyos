@@ -542,7 +542,7 @@ impl Shell {
         ];
         match crate::obj::loader::spawn_with_grants("terminal".into(), &elf, &[], grants) {
             Ok((_p, tid, _main)) => {
-                crate::ui::shell::extern_app::register(shell_kern, "terminal".into());
+                crate::ui::shell::extern_app::register(shell_kern, "Terminal".into());
                 kprintln!("tinyos: uterm launched (thread {tid})");
             }
             Err(e) => kprintln!("uterm: spawn failed: {}", e.msg()),
@@ -793,15 +793,16 @@ fn draw_window(
     s.fill_rect(r.x + 1, r.y + TITLE_H, r.w - 2, 1, STROKE);
 
     // Glyph in the app's hue, then the title.
-    let hue = dock::APPS
+    let entry = dock::APPS
         .iter()
-        .find(|(n, _, _)| win.app.title().eq_ignore_ascii_case(n) || (*n == "clock" && win.app.title() == "Timer"))
-        .map(|&(_, _, h)| h)
-        .unwrap_or(ACC);
-    fonts
-        .mono
-        .draw(s, win.app.glyph(), 12.0, r.x + 16, r.y + 14, hue);
-    let mut gx = r.x + 16 + fonts.mono.measure(win.app.glyph(), 12.0).0 + 10;
+        .find(|(n, _, _)| win.app.title().eq_ignore_ascii_case(n) || (*n == "clock" && win.app.title() == "Timer"));
+    let hue = entry.map(|&(_, _, h)| h).unwrap_or(ACC);
+    // Prefer the dock's per-app glyph when the title matches a known app, so a
+    // hosted (userspace) window shows its real icon (e.g. the terminal's `>_`)
+    // instead of the generic ExternApp placeholder; fall back otherwise.
+    let glyph = entry.map(|&(_, g, _)| g).unwrap_or_else(|| win.app.glyph());
+    fonts.mono.draw(s, glyph, 12.0, r.x + 16, r.y + 14, hue);
+    let mut gx = r.x + 16 + fonts.mono.measure(glyph, 12.0).0 + 10;
     let title = alloc::string::String::from(win.app.title());
     // Hosted windows lead with their trusted process identity (semibold);
     // the app-claimed title follows dimmer, so no app can pose as another.
