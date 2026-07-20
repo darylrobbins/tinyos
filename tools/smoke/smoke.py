@@ -111,6 +111,29 @@ class Qmp:
             time.sleep(per_key)
         self.key(["ret"])
 
+    def click(self, x, y, screen_w=1440, screen_h=900):
+        """Left-click at absolute screen coordinates (x, y).
+
+        The guest exposes a virtio-tablet-pci (absolute) pointer, so QMP abs
+        events are in device units 0..0x7fff mapped linearly across the
+        current display (kernel/src/drivers/input.rs ABS_MAX = 0x7fff),
+        which the compositor scales against its own 1440x900 desktop
+        (kernel/src/main.rs default resolution).
+        """
+        ax = max(0, min(0x7fff, round(x / screen_w * 0x7fff)))
+        ay = max(0, min(0x7fff, round(y / screen_h * 0x7fff)))
+        self._cmd("input-send-event", {"events": [
+            {"type": "abs", "data": {"axis": "x", "value": ax}},
+            {"type": "abs", "data": {"axis": "y", "value": ay}},
+        ]})
+        self._cmd("input-send-event", {"events": [
+            {"type": "btn", "data": {"down": True, "button": "left"}},
+        ]})
+        time.sleep(0.05)
+        self._cmd("input-send-event", {"events": [
+            {"type": "btn", "data": {"down": False, "button": "left"}},
+        ]})
+
 
 class Serial:
     """Background reader over QEMU's stdout; records and echoes every line."""
@@ -220,6 +243,26 @@ def main():
         # 5. ps: the `pid` process rows print only AFTER the whole thread list.
         #    Truncation mid-thread-list (the historical bug) never reaches them.
         step("ps (full listing)", "ps", "ID  NAME", "pid ")
+
+        # Kernel-attested identity: a background windowed app's process name in
+        # `ps` comes from the /apps basename the KERNEL loaded (not an argv[0]
+        # claim). run pixels & then ps must list a process named "pixels".
+        step("attested spawn", "run pixels &", "] pixels &")
+        # `pixels` is windowed (legacy manifest, window=true): opening its
+        # surface makes the compositor unconditionally focus it
+        # (Shell::open() in kernel/src/ui/shell/mod.rs), stealing keyboard
+        # input from the boot console/shell window. There is no hotkey to
+        # refocus a specific window, only a mouse click inside its rect
+        # (kernel/src/ui/shell/mod.rs on_mouse_down -> bring_to_front). The
+        # terminal is window 0, opened first, so it's centered at roughly
+        # x=292..1052, y=176..676 on the 1440x900 desktop and the smaller
+        # pixels window (320x200 content) sits well inside that region —
+        # click near its top-left corner, which is outside pixels' rect, to
+        # bring the shell back into focus before typing `ps`.
+        time.sleep(0.3)
+        qmp.click(300, 185)
+        time.sleep(0.3)
+        step("ps shows attested name", "ps", "pixels")
 
         # 6. Spawn + argv marshaling from userspace: `hello` echoes its args, so
         #    this exercises the SYS_PROCESS_SPAWN argument path end to end.
