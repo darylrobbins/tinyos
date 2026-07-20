@@ -117,7 +117,9 @@ impl Terminal {
             view: TextView::console(SCROLLBACK, FG, argb(210, 228, 228, 236)),
             history: Vec::new(),
             hist_idx: None,
-            cwd: "/".to_string(),
+            // Interactive sessions start in the (single, pre-login) user's home,
+            // not the machine root. Login will set this per session.
+            cwd: "/users/user".to_string(),
             running: None,
             bg_jobs: Vec::new(),
             rows: 24,
