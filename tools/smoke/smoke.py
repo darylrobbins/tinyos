@@ -192,6 +192,14 @@ def main():
         # 1. Boot to a live userspace shell, with the mirror confirmed on.
         serial.wait_for("tinyos: smoke-test console mirror on", args.boot_timeout)
         serial.wait_for("tinyos: shell up", args.boot_timeout)
+        # svcd: the service supervisor is boot-spawned and hosts the Nexus.
+        # Assert the readiness-ordering sequence end-to-end: heartbeatd
+        # publishes, and waiterd's blocking lookup only unblocks after it
+        # (cursor chaining enforces the order).
+        c = serial.wait_for("svcd: started", args.boot_timeout)
+        c = serial.wait_for("heartbeatd: published heartbeat", args.boot_timeout, c)
+        serial.wait_for("waiterd: heartbeat ready", args.boot_timeout, c)
+        print("smoke: svcd supervisor + Nexus readiness ordering OK")
         cur = serial.wait_for("[out] tinyOS shell", args.boot_timeout)
         print("smoke: userspace shell is up")
         time.sleep(0.5)                          # let input settle

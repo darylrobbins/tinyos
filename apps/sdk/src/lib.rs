@@ -21,6 +21,7 @@ pub mod console;
 pub mod debug;
 pub mod entry;
 pub mod fs;
+pub mod nexus;
 pub mod proc;
 pub mod process;
 mod font8x8;

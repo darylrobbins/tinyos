@@ -1,0 +1,12 @@
+[package]
+name = "waiterd"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tinyos-app = { path = "../sdk" }
+abi = { package = "tinyos-abi", path = "../../crates/abi" }
+
+[[bin]]
+name = "waiterd"
+path = "src/main.rs"

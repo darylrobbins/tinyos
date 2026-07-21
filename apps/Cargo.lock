@@ -26,6 +26,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "heartbeatd"
+version = "0.1.0"
+dependencies = [
+ "tinyos-abi",
+ "tinyos-app",
+]
+
+[[package]]
 name = "hello"
 version = "0.1.0"
 dependencies = [
@@ -103,6 +111,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "svcd"
+version = "0.1.0"
+dependencies = [
+ "tinyos-abi",
+ "tinyos-app",
+]
+
+[[package]]
 name = "termcore"
 version = "0.1.0"
 dependencies = [
@@ -175,6 +191,14 @@ name = "view"
 version = "0.1.0"
 dependencies = [
  "textui",
+ "tinyos-abi",
+ "tinyos-app",
+]
+
+[[package]]
+name = "waiterd"
+version = "0.1.0"
+dependencies = [
  "tinyos-abi",
  "tinyos-app",
 ]
