@@ -66,16 +66,20 @@ build: apps
 	mkdir -p $(ESP)/EFI/BOOT
 	cp $(KERNEL_EFI) $(ESP)/EFI/BOOT/$(BOOT_EFI)
 
-# Third-party userspace apps: a separate workspace (aarch64-unknown-none),
-# staged under $(STAGE)/apps and baked into the tinyfs image when the disk is
-# created (see $(DISK) below). aarch64 only for now (userspace is aarch64-first).
+# First-party userspace apps: a separate workspace (aarch64-unknown-none),
+# staged under $(STAGE)/system/apps and baked into the tinyfs image at
+# /system/apps (OS-provided) when the disk is created (see $(DISK) below).
+# aarch64 only for now (userspace is aarch64-first).
 APP_BINS := hello pixels solitaire greet tui progress view vi clock top edit sh terminal
 STAGE    := $(BUILD)/stage
 apps:
 ifeq ($(ARCH),aarch64)
 	cd apps && cargo build --release
-	mkdir -p $(STAGE)/apps
-	$(foreach a,$(APP_BINS),cp apps/target/aarch64-unknown-none/release/$(a) $(STAGE)/apps/$(a);)
+	# Stage fresh: drop any prior layout (incl. the pre-move flat apps/) so a
+	# renamed path or dropped binary can't linger and get baked into the image.
+	rm -rf $(STAGE)/apps $(STAGE)/system/apps
+	mkdir -p $(STAGE)/system/apps
+	$(foreach a,$(APP_BINS),cp apps/target/aarch64-unknown-none/release/$(a) $(STAGE)/system/apps/$(a);)
 endif
 
 mkfs:
@@ -97,15 +101,15 @@ SEED_DIRS := \
 
 # Created only if missing so its contents persist across runs (`make cleandisk`
 # resets it, re-baking the apps currently staged in $(STAGE)). After rebuilding
-# an app, `make sync-apps` refreshes /apps in place — user files survive.
+# an app, `make sync-apps` refreshes /system/apps in place — user files survive.
 $(DISK): | mkfs apps
 	$(MKFS) create $(DISK) --size $(DISK_SIZE) $(if $(wildcard $(STAGE)/*),--populate $(STAGE),)
 	$(MKFS) mkdir $(DISK) $(SEED_DIRS)
 
-# Update /apps inside disk.img without recreating it (VM off). Creates the
-# disk first if it doesn't exist yet (fresh checkout/worktree).
+# Update /system/apps inside disk.img without recreating it (VM off). Creates
+# the disk first if it doesn't exist yet (fresh checkout/worktree).
 sync-apps: mkfs apps | $(DISK)
-	$(foreach a,$(APP_BINS),$(MKFS) put $(DISK) $(STAGE)/apps/$(a) /apps/$(a);)
+	$(foreach a,$(APP_BINS),$(MKFS) put $(DISK) $(STAGE)/system/apps/$(a) /system/apps/$(a);)
 
 # Seed/refresh the default directory tree in an existing image (idempotent;
 # VM off). Creates the disk first if missing. User files survive.

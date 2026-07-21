@@ -1,5 +1,5 @@
 //! terminal — the userspace terminal I/O wrapper (SP1a, line world). Opens a
-//! window, spawns `/apps/sh` into a console channel it serves, drives the
+//! window, spawns `/system/apps/sh` into a console channel it serves, drives the
 //! pure `termcore::Term` model with events from both sides, and renders the
 //! result with the mono atlas. Mirrors how `apps/vi` wraps `crates/vicore`.
 
@@ -131,7 +131,7 @@ fn main(env: Env) -> i32 {
         Err(_) => return 1,
     };
 
-    let elf = match fs::read("/apps/sh") {
+    let elf = match fs::read("/system/apps/sh") {
         Ok(d) => d,
         Err(_) => return 1,
     };

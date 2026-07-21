@@ -111,7 +111,7 @@ impl Shell {
 
     fn run(&mut self, name: &str, args: &[&str], background: bool) {
         let grants = self.child_grants();
-        let path = format!("/apps/{name}");
+        let path = format!("/system/apps/{name}");
         match process::exec(&path, args, &grants, /*want_window=*/ true) {
             Ok(child) => {
                 // A detached app (its own window, no console) never touches this

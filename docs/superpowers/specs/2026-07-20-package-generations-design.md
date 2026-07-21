@@ -28,7 +28,8 @@ escalation hole). A name-lookup service answers `resolve(kind, name)`: pinned cl
 (kernel-ref/ca-trust/auth) resolve only from `/system`; else search user → local →
 system, first hit wins, candidates drawn from the current generation's active set;
 returns `{store_path, entry, version}`. The shell's `run` (`apps/shell/src/main.rs`,
-currently `fs::read("/apps/{name}")`) switches to `resolve(cmd, name)`.
+currently the flat `fs::read("/system/apps/{name}")`) switches to
+`resolve(cmd, name)`.
 
 ## Transactional package DB (`/local/registry`)
 
@@ -101,5 +102,5 @@ share}` + `/local/{bin,apps,share}` + `/users/<u>/{bin,apps,share}` resolved by
 `pkgd`; `/volumes/boot` A/B kernel slots. New service `pkgd` (jailed to
 `/local/registry`), `crates/abi/src/pkg.rs` (read: `OP_RESOLVE/CURRENT_GEN/LIST/
 GEN_LIST`; admin: `OP_INSTALL/UPDATE/ROLLBACK/SET_SERVICE/GC`); tag 16 `PKG`; manifest
-token `pkg.admin`. This milestone also enables `/apps/<name>` bundle directories
-(replacing the flat ELF).
+token `pkg.admin`. This milestone also enables `<tree>/apps/<name>/` bundle
+directories (replacing the flat `/system/apps/<name>` ELF).

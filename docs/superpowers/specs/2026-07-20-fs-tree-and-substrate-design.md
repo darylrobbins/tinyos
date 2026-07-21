@@ -109,7 +109,9 @@ mint-broker tags between init and sessiond.
 
 1. **Tree + jail repoint (done).** Seed the tree at image creation; repoint the
    launcher jail from `/data/<name>` to `/users/user/apps.data/<name>` (single implicit
-   user until login); terminal cwd → `/users/user`. `/apps` stays flat ELF.
+   user until login); terminal cwd → `/users/user`; the bundled apps move from
+   the flat `/apps` to `/system/apps` (still flat ELF; the resolver comes with
+   the package milestone).
 2. **Supervisor + Nexus**, then **Secrets**, **Powerbox v2**, **Package + generations**,
    **Multi-user + admin** — each its own milestone; see companion specs. Login (phase
    multi-user) replaces the single implicit `DEFAULT_USER`.

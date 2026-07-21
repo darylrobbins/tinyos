@@ -521,14 +521,15 @@ fn sys_process_exec(
             .filter(|s| !s.is_empty())
             .unwrap_or(&path),
     );
-    // Confine to the flat /apps namespace: the attested identity must be the
-    // real path, so `/apps/../evil` (basename "evil") or a trailing slash can't
-    // masquerade. sh always runs `/apps/<name>`, so this rejects nothing real.
-    if path != alloc::format!("/apps/{name}") {
+    // Confine to the flat /system/apps namespace: the attested identity must be
+    // the real path, so `/system/apps/../evil` (basename "evil") or a trailing
+    // slash can't masquerade. sh always runs `/system/apps/<name>`, so this
+    // rejects nothing real. (Until the resolver lands, app code is OS-provided.)
+    if path != alloc::format!("/system/apps/{name}") {
         return Err(ST_INVALID_ARGS);
     }
 
-    // The KERNEL reads the app (ambient /apps, like SvcJob) — this is the
+    // The KERNEL reads the app (ambient /system/apps, like SvcJob) — this is the
     // attestation: identity comes from what the kernel resolved, not a claim.
     let elf = match crate::fs::read("/", &path) {
         Ok(e) => e,
