@@ -13,15 +13,18 @@ no problems.
 - Boots as a UEFI application on QEMU — arm64 `virt` (HVF-accelerated on
   Apple Silicon, the fast dev loop) or x86_64 `q35` (TCG-emulated) — grabs
   the GOP framebuffer, exits boot services, and runs freestanding.
-- Animated boot splash → desktop with procedural "aurora" wallpaper, frosted
-  Meridian shell (dock, Ctrl+K command palette), draggable windows with
-  macOS-style chrome.
+- Animated boot splash → lock screen → desktop with a procedural "aurora"
+  wallpaper and a frosted Meridian shell: a dock, a Ctrl+K launcher (open
+  apps, do arithmetic, start timers), a quick-settings panel, and draggable,
+  snappable windows with soft-dark chrome (click-to-focus, Alt+Tab).
 - **Real userspace (arm64):** apps are static ELF binaries running at EL0 in
   per-process TTBR1 address spaces (ASID-tagged, flush-free switches),
   talking to the kernel through a ~16-syscall capability ABI — handles +
   rights, channels carrying bytes + handles, shared-memory objects, one
   unified wait. Timer-preempted, memory-quota'd (64 MiB/process), spawnable
-  from userspace with explicit capability grants.
+  from userspace with explicit capability grants. Apps launch by path with
+  kernel-attested identity and a least-privilege manifest — each declares the
+  capabilities it needs, and gets nothing more.
 - **Everything else is a protocol over channels**, so the kernel stays
   small: the console protocol (line stdin, full-screen cell surfaces for
   vim-class TUIs, an Ink-style bottom live region), the window protocol
@@ -47,7 +50,11 @@ no problems.
 
 | | |
 |---|---|
-| ![splash](docs/screenshots/splash.png) | ![terminal](docs/screenshots/terminal.png) |
+| ![terminal](docs/screenshots/terminal.png) | ![launcher](docs/screenshots/launcher.png) |
+| ![lock screen](docs/screenshots/lockscreen.png) | ![quick settings](docs/screenshots/quick.png) |
+
+The userspace shell in a terminal window; the Ctrl+K launcher (ask-anything:
+open apps, arithmetic, timers); the lock screen; and the quick-settings panel.
 
 ## Running it (macOS, Apple Silicon)
 
@@ -98,7 +105,8 @@ kernel/src/
   gfx/ ui/ term/ compositor, Meridian shell, terminal emulator
 apps/            the userspace workspace: sdk/ (tinyos-app runtime) + apps
 tools/mkfs-tinyfs/  host tool: create/populate/update/inspect disk images
-docs/superpowers/   design specs + roadmap (start: 2026-07-19-roadmap.md)
+docs/architecture/  living design notes (display & windowing model)
+docs/superpowers/   design specs + roadmap (specs/2026-07-19-roadmap.md)
 ```
 
 Fonts: [Geist and Geist Mono](https://vercel.com/font), OFL (license in
