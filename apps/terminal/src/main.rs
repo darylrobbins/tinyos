@@ -227,6 +227,13 @@ fn main(env: Env) -> i32 {
         for line in term.take_mirror() {
             tinyos_app::debug::mirror(&line);
         }
+        // The hosted shell exited (e.g. `exit`): leave so the compositor reaps
+        // and respawns us. Checked on the process handle directly — a lingering
+        // background job holding a console dup would keep con_kern's peer open,
+        // so peer-close alone is not enough.
+        if child.exited() {
+            close = true;
+        }
         if close {
             break;
         }
@@ -247,6 +254,7 @@ fn main(env: Env) -> i32 {
         let mut items = [
             WaitItem { handle: win.handle(), want: tinyos_app::syscall::SIG_READABLE, observed: 0 },
             WaitItem { handle: con_kern.0, want: tinyos_app::syscall::SIG_READABLE, observed: 0 },
+            WaitItem { handle: child.proc_h, want: tinyos_app::syscall::SIG_EXITED, observed: 0 },
         ];
         let _ = wait_many(&mut items, uptime_us() + 50_000);
     }
