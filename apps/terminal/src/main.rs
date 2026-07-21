@@ -185,7 +185,15 @@ fn main(env: Env) -> i32 {
             break;
         }
 
-        while let Ok(msg) = con_kern.try_recv() {
+        loop {
+            let msg = match con_kern.try_recv() {
+                Ok(m) => m,
+                Err(tinyos_app::syscall::ST_SHOULD_WAIT) => break, // console drained this frame
+                // Any other error means sh (the console peer) is gone — the
+                // shell exited (`exit`/`logout`) or crashed. Close the terminal;
+                // the compositor respawns it if it was the boot default.
+                Err(_) => { close = true; break; }
+            };
             let op = msg.bytes.get(0..4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
             if op == Some(abi::console::OP_SURFACE_OPEN) && msg.bytes.len() >= 12 {
                 let cols = u32::from_le_bytes(msg.bytes[4..8].try_into().unwrap()) as usize;
@@ -218,6 +226,9 @@ fn main(env: Env) -> i32 {
         // so this costs one syscall per output line only in headless runs.
         for line in term.take_mirror() {
             tinyos_app::debug::mirror(&line);
+        }
+        if close {
+            break;
         }
         if term.surface().is_none() {
             if let Some((va, _, _)) = surf.take() {
