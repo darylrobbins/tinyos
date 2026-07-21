@@ -50,10 +50,11 @@ no problems.
 
 | | |
 |---|---|
-| ![launcher](docs/screenshots/launcher.png) | ![lock screen](docs/screenshots/lockscreen.png) |
+| ![terminal](docs/screenshots/terminal.png) | ![launcher](docs/screenshots/launcher.png) |
+| ![lock screen](docs/screenshots/lockscreen.png) | ![quick settings](docs/screenshots/quick.png) |
 
-The Ctrl+K launcher (ask-anything: open apps, arithmetic, timers) and the
-lock screen.
+The userspace shell in a terminal window; the Ctrl+K launcher (ask-anything:
+open apps, arithmetic, timers); the lock screen; and the quick-settings panel.
 
 ## Running it (macOS, Apple Silicon)
 
