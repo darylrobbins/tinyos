@@ -18,6 +18,7 @@ pub mod alloc_impl;
 pub mod broker;
 pub mod channel;
 pub mod console;
+pub mod debug;
 pub mod entry;
 pub mod fs;
 pub mod proc;

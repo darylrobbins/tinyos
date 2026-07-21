@@ -290,31 +290,16 @@ def main():
             raise AssertionError("panic running a windowed app from the shell")
         step("prompt live + focus kept after windowed launch", "help", "[out] commands:")
 
-        # 11. Launch path: the command palette (Ctrl+K) -> `uterm` -> Enter
-        #     spawns the userspace terminal. It renders to its own window
-        #     (serial can't see that), so this only proves the launch path
-        #     fired the kernel-side launch + spawn without panicking.
-        print("smoke: > (Ctrl+K) uterm")
-        qmp.key(["ctrl", "k"])
-        time.sleep(0.4)
-        qmp.type_line("uterm")
-        cur = serial.wait_for("uterm launched", args.step_timeout, cur)
-        time.sleep(0.6)   # let /system/apps/terminal spawn sh
-        if serial.panic:
-            raise AssertionError("panic after launching uterm")
-        print("smoke: uterm launched cleanly")
-
-        # Run a full-screen surface app (top) inside the userspace terminal and
-        # quit it. Renders to uterm's window (not serial), so we only assert the
-        # surface host path doesn't panic/wedge.
-        print("smoke: > (in uterm) run top")
-        qmp.type_line("run top")
-        time.sleep(1.5)                 # let top open its surface + render frames
-        qmp.key(["q"])                  # top quits on 'q' (apps/top/src/main.rs:110)
-        time.sleep(0.6)
-        if serial.panic:
-            raise AssertionError("panic hosting a surface app in uterm")
-        print("smoke: surface app hosted in uterm cleanly")
+        # 11. Respawn: the boot default IS the userspace terminal now. `exit`
+        #     ends sh (apps/shell/src/main.rs); the terminal then exits (detects
+        #     sh's process exit) and the compositor must respawn a fresh one so
+        #     the desktop is never left shell-less. Assert output round-trips again.
+        print("smoke: > exit    (end sh -> terminal exits -> compositor respawns it)")
+        qmp.type_line("exit")
+        cur = serial.wait_for("userspace terminal exited — respawning", args.step_timeout, cur)
+        cur = serial.wait_for("tinyos: uterm launched", args.step_timeout, cur)
+        time.sleep(0.8)                          # let the respawned terminal spawn sh
+        step("respawned terminal is live", "echo respawned", "[out] respawned")
 
         # 12. Durability: the file must survive a real sync+reboot. `reboot`
         #     syncs then PSCI-resets; QEMU restarts the same process in place,

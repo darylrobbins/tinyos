@@ -36,6 +36,9 @@ pub struct PendingApp {
     /// launches (dock/palette); false for windows a terminal's `run` spawns,
     /// so opening an app doesn't steal focus from the terminal you're typing in.
     pub focus_on_open: bool,
+    /// This is the compositor's boot-default terminal — the reaper respawns it
+    /// when it exits (ordinary windows are reaped silently).
+    pub is_default: bool,
 }
 
 static SPAWN_QUEUE: Mutex<Vec<PendingApp>> = Mutex::new(Vec::new());
@@ -46,6 +49,18 @@ pub fn register(shell: Arc<ChannelEnd>, name: String, focus_on_open: bool) {
         shell,
         name,
         focus_on_open,
+        is_default: false,
+    });
+}
+
+/// Register the boot-default terminal: focused, and tagged so the compositor
+/// respawns it if it exits.
+pub fn register_default(shell: Arc<ChannelEnd>, name: String) {
+    SPAWN_QUEUE.lock().push(PendingApp {
+        shell,
+        name,
+        focus_on_open: true,
+        is_default: true,
     });
 }
 
@@ -80,6 +95,8 @@ pub struct ExternApp {
     name: String,
     /// App-claimed window title (untrusted).
     title: String,
+    /// True for the compositor's boot-default terminal (drives respawn).
+    is_default: bool,
     w: u32,
     h: u32,
     surface_pa: usize,
@@ -134,6 +151,7 @@ impl ExternApp {
                 ch: pending.shell.clone(),
                 name: pending.name.clone(),
                 title,
+                is_default: pending.is_default,
                 w,
                 h,
                 surface_pa,
@@ -180,6 +198,10 @@ impl ExternApp {
 
     fn send(&self, bytes: Vec<u8>) {
         let _ = self.ch.send(Message { bytes, handles: Vec::new() });
+    }
+
+    pub fn is_default(&self) -> bool {
+        self.is_default
     }
 }
 

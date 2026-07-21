@@ -28,8 +28,8 @@ pub use abi::syscall::{
     ABI_VERSION, EXEC_REQUEST_WINDOW, ST_ACCESS_DENIED, ST_BAD_HANDLE, ST_BUFFER_TOO_SMALL,
     ST_INVALID_ARGS, ST_KILLED, ST_LIMIT_EXCEEDED, ST_NOT_SUPPORTED, ST_NO_MEMORY, ST_OK,
     ST_PEER_CLOSED, ST_SHOULD_WAIT, ST_TIMED_OUT, ST_WRONG_TYPE, SYS_ABI_VERSION,
-    SYS_CHANNEL_CREATE, SYS_CHANNEL_RECV, SYS_CHANNEL_SEND, SYS_CLOCK_UPTIME, SYS_HANDLE_CLOSE,
-    SYS_HANDLE_DUP, SYS_LOG, SYS_MEMOBJ_CREATE, SYS_MEMOBJ_MAP, SYS_MEMOBJ_SIZE,
+    SYS_CHANNEL_CREATE, SYS_CHANNEL_RECV, SYS_CHANNEL_SEND, SYS_CLOCK_UPTIME, SYS_DEBUG_MIRROR,
+    SYS_HANDLE_CLOSE, SYS_HANDLE_DUP, SYS_LOG, SYS_MEMOBJ_CREATE, SYS_MEMOBJ_MAP, SYS_MEMOBJ_SIZE,
     SYS_MEMOBJ_UNMAP, SYS_PROCESS_EXEC, SYS_PROCESS_EXIT, SYS_PROCESS_SPAWN, SYS_WAIT_MANY,
 };
 use abi::bootstrap::TAG_SHELL;
@@ -42,6 +42,7 @@ type SysResult = Result<u64, u32>;
 pub fn dispatch(sysno: u64, args: [u64; 6]) -> (u32, u64) {
     let r = match sysno {
         SYS_LOG => sys_log(args[0], args[1]),
+        SYS_DEBUG_MIRROR => sys_debug_mirror(args[0], args[1]),
         SYS_HANDLE_CLOSE => sys_handle_close(args[0]),
         SYS_HANDLE_DUP => sys_handle_dup(args[0], args[1]),
         SYS_CHANNEL_CREATE => sys_channel_create(args[0]),
@@ -138,6 +139,20 @@ fn sys_log(buf: u64, len: u64) -> SysResult {
         Ok(s) => {
             let id = crate::sched::current_id();
             kprintln!("app[{id}]: {}", s.trim_end_matches('\n'));
+            Ok(0)
+        }
+        Err(_) => Err(ST_INVALID_ARGS),
+    }
+}
+
+fn sys_debug_mirror(buf: u64, len: u64) -> SysResult {
+    if len > LOG_MAX {
+        return Err(ST_INVALID_ARGS);
+    }
+    let bytes = copy_in(buf, len)?;
+    match core::str::from_utf8(&bytes) {
+        Ok(s) => {
+            crate::smoke::mirror(s);
             Ok(0)
         }
         Err(_) => Err(ST_INVALID_ARGS),

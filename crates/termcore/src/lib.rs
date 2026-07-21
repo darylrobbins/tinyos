@@ -89,6 +89,10 @@ pub fn resolve_cell(cell: &abi::console::Cell, theme_fg: u32, theme_bg: u32) -> 
 /// reads back render state and outbound console-message bytes.
 pub struct Term {
     scrollback: VecDeque<Line>,
+    /// Texts of lines frozen since the last `take_mirror` drain. Used only to
+    /// echo output to serial in smoke runs; drained every frame by the app so
+    /// it never accumulates.
+    mirror: Vec<String>,
     prompt: Vec<(String, u32)>,
     input: String,
     /// Char index (not byte index) into `input`.
@@ -114,6 +118,7 @@ impl Term {
     pub fn new() -> Self {
         Term {
             scrollback: VecDeque::new(),
+            mirror: Vec::new(),
             prompt: Vec::new(),
             input: String::new(),
             cursor: 0,
@@ -130,6 +135,7 @@ impl Term {
     }
 
     fn freeze(&mut self, text: String, color: u32) {
+        self.mirror.push(text.clone());
         self.scrollback.push_back(Line { text, color });
         while self.scrollback.len() > SCROLLBACK_CAP {
             self.scrollback.pop_front();
@@ -376,6 +382,12 @@ impl Term {
         core::mem::take(&mut self.out)
     }
 
+    /// Drain the texts of lines frozen since the last call (for the serial
+    /// mirror). One-shot: subsequent calls are empty until more lines freeze.
+    pub fn take_mirror(&mut self) -> Vec<String> {
+        core::mem::take(&mut self.mirror)
+    }
+
     /// True since the last render; cleared by `clear_dirty`.
     pub fn dirty(&self) -> bool {
         self.dirty
@@ -605,6 +617,18 @@ mod tests {
         let b = OP_CLEAR.to_le_bytes().to_vec();
         t.on_console_msg(&b);
         assert_eq!(t.scrollback().count(), 0);
+    }
+
+    #[test]
+    fn take_mirror_returns_frozen_lines_then_drains() {
+        let mut t = Term::new();
+        // Two complete lines in one OP_WRITE payload.
+        let mut b = abi::console::OP_WRITE.to_le_bytes().to_vec();
+        b.extend_from_slice(b"alpha\nbeta\n");
+        t.on_console_msg(&b);
+        assert_eq!(t.take_mirror(), alloc::vec!["alpha".to_string(), "beta".to_string()]);
+        // Draining is one-shot: a second call is empty until more freezes.
+        assert!(t.take_mirror().is_empty());
     }
 
     #[test]

@@ -37,6 +37,20 @@ use self::palette::{Action, LauncherHit, Palette};
 use self::tokens::*;
 use super::cursor;
 
+/// How soon after launch a default-terminal exit counts as a crash (µs).
+const DEFAULT_TERM_FAST_CRASH_US: u64 = 3_000_000;
+/// Consecutive fast crashes before giving up on the userspace terminal.
+const DEFAULT_TERM_MAX_FAST_CRASHES: u32 = 3;
+
+/// Respawn bookkeeping for the boot-default userspace terminal. `None` when the
+/// default is the in-kernel fallback (never exits) or respawn has given up.
+struct DefaultTerm {
+    /// Uptime (µs) when the current default terminal was launched.
+    launched_us: u64,
+    /// Consecutive exits within `DEFAULT_TERM_FAST_CRASH_US` of launch.
+    fast_crashes: u32,
+}
+
 pub struct Window {
     pub rect: Rect,
     pub app: Box<dyn App>,
@@ -123,6 +137,8 @@ pub struct Shell {
     pending: Vec<extern_app::PendingApp>,
     /// Launcher-spawned SDK apps whose services the shell pumps.
     svc_jobs: Vec<svc::SvcJob>,
+    /// Set when the boot default is the userspace terminal; drives respawn.
+    default_term: Option<DefaultTerm>,
 }
 
 impl Shell {
@@ -151,8 +167,16 @@ impl Shell {
             last_input_us: 0,
             pending: Vec::new(),
             svc_jobs: Vec::new(),
+            default_term: None,
         };
-        shell.open(Box::new(crate::apps::terminal::TerminalApp::new()), true);
+        // Boot into the userspace terminal where it can run (aarch64 with
+        // /system/apps/terminal present); otherwise fall back to the in-kernel
+        // terminal — the only shell on x86_64 or a diskless boot. The window
+        // appears a few frames after the splash while the app execs and opens
+        // it (vs the kernel terminal's synchronous window).
+        if !shell.launch_uterm(true) {
+            shell.open(Box::new(crate::apps::terminal::TerminalApp::new()), true);
+        }
         shell
     }
 
@@ -549,7 +573,7 @@ impl Shell {
             // SDK apps, spawned from /system/apps (Phase 4: the launcher speaks
             // the same protocols as the terminal's `run`).
             "clock" | "solitaire" | "pixels" => self.launch_app(name, &[]),
-            "uterm" => self.launch_uterm(),
+            "uterm" => { self.launch_uterm(false); }
             _ => {}
         }
     }
@@ -567,14 +591,14 @@ impl Shell {
     /// can_kill PROC + the FS/PROC brokers (to mint sh's connections). No
     /// console — it creates its own to serve sh. aarch64 only.
     #[cfg(target_arch = "aarch64")]
-    pub fn launch_uterm(&mut self) {
+    pub fn launch_uterm(&mut self, as_default: bool) -> bool {
         use crate::obj::channel::create;
         use crate::obj::handle::{Handle, RIGHTS_ALL};
         use crate::obj::Object;
         use abi::bootstrap::{TAG_FS, TAG_FS_BROKER, TAG_PROC, TAG_PROC_BROKER, TAG_SHELL};
         let elf = match crate::fs::read("/", "/system/apps/terminal") {
             Ok(e) => e,
-            Err(e) => { kprintln!("uterm: /system/apps/terminal: {e}"); return; }
+            Err(e) => { kprintln!("uterm: /system/apps/terminal: {e}"); return false; }
         };
         let (shell_app, shell_kern) = create();
         let grants = alloc::vec![
@@ -586,16 +610,27 @@ impl Shell {
         ];
         match crate::obj::loader::spawn_with_grants("terminal".into(), &elf, &[], grants) {
             Ok((_p, tid, _main)) => {
-                crate::ui::shell::extern_app::register(shell_kern, "Terminal".into(), true);
+                if as_default {
+                    crate::ui::shell::extern_app::register_default(shell_kern, "Terminal".into());
+                    let fast = self.default_term.as_ref().map_or(0, |d| d.fast_crashes);
+                    self.default_term = Some(DefaultTerm {
+                        launched_us: crate::arch::timer::uptime_us(),
+                        fast_crashes: fast,
+                    });
+                } else {
+                    crate::ui::shell::extern_app::register(shell_kern, "Terminal".into(), true);
+                }
                 kprintln!("tinyos: uterm launched (thread {tid})");
+                true
             }
-            Err(e) => kprintln!("uterm: spawn failed: {}", e.msg()),
+            Err(e) => { kprintln!("uterm: spawn failed: {}", e.msg()); false }
         }
     }
 
     #[cfg(not(target_arch = "aarch64"))]
-    pub fn launch_uterm(&mut self) {
+    pub fn launch_uterm(&mut self, _as_default: bool) -> bool {
         kprintln!("uterm: userspace unsupported on this arch");
+        false
     }
 
     fn act(&mut self, action: Action) {
@@ -661,16 +696,53 @@ impl Shell {
         }
         let mut i = 0;
         while i < self.windows.len() {
-            let closed = self.windows[i]
+            let (closed, was_default) = match self.windows[i]
                 .app
                 .as_any()
                 .downcast_mut::<extern_app::ExternApp>()
-                .is_some_and(extern_app::ExternApp::pump);
+            {
+                Some(a) => (a.pump(), a.is_default()),
+                None => (false, false),
+            };
             if closed {
                 self.windows.remove(i);
                 self.focus_topmost_visible();
+                if was_default {
+                    self.respawn_default_terminal();
+                }
             } else {
                 i += 1;
+            }
+        }
+    }
+
+    /// The boot-default terminal window exited. Respawn it, unless it has been
+    /// crash-looping — then fall back to the in-kernel terminal so the desktop
+    /// always has a working shell rather than a spinning respawn.
+    fn respawn_default_terminal(&mut self) {
+        let now = crate::arch::timer::uptime_us();
+        let fast = if let Some(dt) = self.default_term.as_mut() {
+            if now.saturating_sub(dt.launched_us) < DEFAULT_TERM_FAST_CRASH_US {
+                dt.fast_crashes += 1;
+            } else {
+                dt.fast_crashes = 0;
+            }
+            dt.fast_crashes
+        } else {
+            return; // default is the kernel terminal (or gave up): nothing to do
+        };
+        if fast >= DEFAULT_TERM_MAX_FAST_CRASHES {
+            kprintln!("tinyos: userspace terminal crash-looping — falling back to kernel terminal");
+            self.default_term = None;
+            self.open(Box::new(crate::apps::terminal::TerminalApp::new()), true);
+        } else {
+            kprintln!("tinyos: userspace terminal exited — respawning");
+            if !self.launch_uterm(true) {
+                // Re-launch failed (e.g. /system/apps/terminal became unreadable):
+                // don't leave the desktop shell-less — fall back to the
+                // in-kernel terminal, same as the crash-loop give-up.
+                self.default_term = None;
+                self.open(Box::new(crate::apps::terminal::TerminalApp::new()), true);
             }
         }
     }
