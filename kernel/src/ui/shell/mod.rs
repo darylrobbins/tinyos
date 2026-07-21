@@ -170,7 +170,7 @@ impl Shell {
             default_term: None,
         };
         // Boot into the userspace terminal where it can run (aarch64 with
-        // /apps/terminal present); otherwise fall back to the in-kernel
+        // /system/apps/terminal present); otherwise fall back to the in-kernel
         // terminal — the only shell on x86_64 or a diskless boot. The window
         // appears a few frames after the splash while the app execs and opens
         // it (vs the kernel terminal's synchronous window).
@@ -570,7 +570,7 @@ impl Shell {
             "terminal" => self.open(Box::new(crate::apps::terminal::TerminalApp::new()), true),
             "notes" => self.launch_app("edit", &[alloc::string::String::from("/notes.txt")]),
             "monitor" => self.open(Box::new(crate::apps::monitor::MonitorApp::new()), true),
-            // SDK apps, spawned from /apps (Phase 4: the launcher speaks
+            // SDK apps, spawned from /system/apps (Phase 4: the launcher speaks
             // the same protocols as the terminal's `run`).
             "clock" | "solitaire" | "pixels" => self.launch_app(name, &[]),
             "uterm" => { self.launch_uterm(false); }
@@ -578,7 +578,7 @@ impl Shell {
         }
     }
 
-    /// Spawn an SDK app from /apps as a shell-hosted windowed app.
+    /// Spawn an SDK app from /system/apps as a shell-hosted windowed app.
     pub fn launch_app(&mut self, name: &str, argv: &[alloc::string::String]) {
         match svc::SvcJob::spawn(name, argv) {
             Ok(j) => self.svc_jobs.push(j),
@@ -586,7 +586,7 @@ impl Shell {
         }
     }
 
-    /// Launch the userspace terminal (/apps/terminal) as a top-level window
+    /// Launch the userspace terminal (/system/apps/terminal) as a top-level window
     /// with terminal-grade grants: window + a broker-minted whole-root FS and
     /// can_kill PROC + the FS/PROC brokers (to mint sh's connections). No
     /// console — it creates its own to serve sh. aarch64 only.
@@ -596,9 +596,9 @@ impl Shell {
         use crate::obj::handle::{Handle, RIGHTS_ALL};
         use crate::obj::Object;
         use abi::bootstrap::{TAG_FS, TAG_FS_BROKER, TAG_PROC, TAG_PROC_BROKER, TAG_SHELL};
-        let elf = match crate::fs::read("/", "/apps/terminal") {
+        let elf = match crate::fs::read("/", "/system/apps/terminal") {
             Ok(e) => e,
-            Err(e) => { kprintln!("uterm: /apps/terminal: {e}"); return false; }
+            Err(e) => { kprintln!("uterm: /system/apps/terminal: {e}"); return false; }
         };
         let (shell_app, shell_kern) = create();
         let grants = alloc::vec![
@@ -738,7 +738,7 @@ impl Shell {
         } else {
             kprintln!("tinyos: userspace terminal exited — respawning");
             if !self.launch_uterm(true) {
-                // Re-launch failed (e.g. /apps/terminal became unreadable):
+                // Re-launch failed (e.g. /system/apps/terminal became unreadable):
                 // don't leave the desktop shell-less — fall back to the
                 // in-kernel terminal, same as the crash-loop give-up.
                 self.default_term = None;

@@ -65,7 +65,7 @@ pub fn spawn(elf: &[u8], args: &[&str], grants: &[(u32, u32)]) -> Result<Child, 
     }
 }
 
-/// Exec a `/apps/…`-style path. The KERNEL loads it (attesting identity from
+/// Exec a `/system/apps/…`-style path. The KERNEL loads it (attesting identity from
 /// the path) and delegates `grants` unchanged. `want_window` asks the kernel to
 /// mint a window under the attested identity (honored iff the app declares
 /// `window`). The child sees `args` as its argv (the path is kernel-only).

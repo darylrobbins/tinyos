@@ -57,7 +57,7 @@ run: QEMU_ARGS += $(DISPLAY_ARG)
 # aarch64 only; catches runtime bugs host `make test` cannot (see tools/smoke).
 SMOKE_ARGS = -display none -fw_cfg name=opt/tinyos/smoke,string=1
 
-.PHONY: build apps run gdb clean cleandisk firmware mkfs test sync-apps smoke
+.PHONY: build apps run gdb clean cleandisk firmware mkfs test sync-apps seed-tree smoke
 
 # Never `cargo build --target ...` at the workspace root: mkfs-tinyfs is a
 # host-target std binary and would fail to cross-compile for UEFI.
@@ -66,31 +66,55 @@ build: apps
 	mkdir -p $(ESP)/EFI/BOOT
 	cp $(KERNEL_EFI) $(ESP)/EFI/BOOT/$(BOOT_EFI)
 
-# Third-party userspace apps: a separate workspace (aarch64-unknown-none),
-# staged under $(STAGE)/apps and baked into the tinyfs image when the disk is
-# created (see $(DISK) below). aarch64 only for now (userspace is aarch64-first).
+# First-party userspace apps: a separate workspace (aarch64-unknown-none),
+# staged under $(STAGE)/system/apps and baked into the tinyfs image at
+# /system/apps (OS-provided) when the disk is created (see $(DISK) below).
+# aarch64 only for now (userspace is aarch64-first).
 APP_BINS := hello pixels solitaire greet tui progress view vi clock top edit sh terminal
 STAGE    := $(BUILD)/stage
 apps:
 ifeq ($(ARCH),aarch64)
 	cd apps && cargo build --release
-	mkdir -p $(STAGE)/apps
-	$(foreach a,$(APP_BINS),cp apps/target/aarch64-unknown-none/release/$(a) $(STAGE)/apps/$(a);)
+	# Stage fresh: drop any prior layout (incl. the pre-move flat apps/) so a
+	# renamed path or dropped binary can't linger and get baked into the image.
+	rm -rf $(STAGE)/apps $(STAGE)/system/apps
+	mkdir -p $(STAGE)/system/apps
+	$(foreach a,$(APP_BINS),cp apps/target/aarch64-unknown-none/release/$(a) $(STAGE)/system/apps/$(a);)
 endif
 
 mkfs:
 	cargo build -p mkfs-tinyfs
 
+# The default filesystem directory tree (provenance-first: /system OS-provided,
+# /local machine-scoped, /users/<u> per-user, /volumes foreign mounts, /tmp).
+# Seeded empty at image creation; subsystems (secrets, pkg, supervisor, …) fill
+# these locations later. See docs/superpowers/specs/2026-07-20-fs-tree-*.
+SEED_DIRS := \
+  /system/bin /system/apps /system/share /system/defaults /system/services \
+  /local/bin /local/apps /local/share /local/services /local/config \
+  /local/state /local/cache /local/log /local/secrets /local/registry /local/shared \
+  /users/user/Documents /users/user/Downloads /users/user/Pictures \
+  /users/user/Music /users/user/Video /users/user/Templates \
+  /users/user/bin /users/user/apps /users/user/share /users/user/apps.data \
+  /users/user/registry /users/user/secrets /users/user/trash \
+  /volumes /tmp
+
 # Created only if missing so its contents persist across runs (`make cleandisk`
 # resets it, re-baking the apps currently staged in $(STAGE)). After rebuilding
-# an app, `make sync-apps` refreshes /apps in place — user files survive.
+# an app, `make sync-apps` refreshes /system/apps in place — user files survive.
 $(DISK): | mkfs apps
 	$(MKFS) create $(DISK) --size $(DISK_SIZE) $(if $(wildcard $(STAGE)/*),--populate $(STAGE),)
+	$(MKFS) mkdir $(DISK) $(SEED_DIRS)
 
-# Update /apps inside disk.img without recreating it (VM off). Creates the
-# disk first if it doesn't exist yet (fresh checkout/worktree).
+# Update /system/apps inside disk.img without recreating it (VM off). Creates
+# the disk first if it doesn't exist yet (fresh checkout/worktree).
 sync-apps: mkfs apps | $(DISK)
-	$(foreach a,$(APP_BINS),$(MKFS) put $(DISK) $(STAGE)/apps/$(a) /apps/$(a);)
+	$(foreach a,$(APP_BINS),$(MKFS) put $(DISK) $(STAGE)/system/apps/$(a) /system/apps/$(a);)
+
+# Seed/refresh the default directory tree in an existing image (idempotent;
+# VM off). Creates the disk first if missing. User files survive.
+seed-tree: mkfs | $(DISK)
+	$(MKFS) mkdir $(DISK) $(SEED_DIRS)
 
 test:
 	cargo test -p tinyfs

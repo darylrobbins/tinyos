@@ -143,7 +143,7 @@ pub fn boot_hook() {
             // Spawn hello directly (no watchdog), let it exit; UI heartbeat
             // tells us if the system survives teardown.
             let argv = [alloc::string::String::from("a"), alloc::string::String::from("b")];
-            match crate::fs::read("/", "/apps/hello") {
+            match crate::fs::read("/", "/system/apps/hello") {
                 Ok(elf) => match super::loader::spawn(alloc::string::String::from("hello"), &elf, &argv, &super::loader::GrantSet::all()) {
                     Ok(app) => kprintln!("tinyos: spawnonly thread {}", app.thread_id),
                     Err(e) => kprintln!("tinyos: spawnonly FAILED {}", e.msg()),
@@ -152,7 +152,7 @@ pub fn boot_hook() {
             }
         }
         Some("fs") => {
-            for path in ["/", "/apps"] {
+            for path in ["/", "/system/apps"] {
                 match crate::fs::list("/", path) {
                     Ok(entries) => {
                         for e in entries {
@@ -173,7 +173,7 @@ pub fn boot_hook() {
     }
 }
 
-/// Headless end-to-end: load /apps/hello with argv, pump its console to
+/// Headless end-to-end: load /system/apps/hello with argv, pump its console to
 /// serial, and report the exit code. Mirrors what the terminal `run` does.
 /// Runs twice to prove repeatability + continued liveness after teardown.
 fn run_hello_watchdog() {
@@ -187,10 +187,10 @@ fn run_hello_once() {
         alloc::string::String::from("beta"),
         alloc::string::String::from("gamma"),
     ];
-    let elf = match crate::fs::read("/", "/apps/hello") {
+    let elf = match crate::fs::read("/", "/system/apps/hello") {
         Ok(e) => e,
         Err(err) => {
-            kprintln!("tinyos: runtest FAILED: /apps/hello: {err}");
+            kprintln!("tinyos: runtest FAILED: /system/apps/hello: {err}");
             return;
         }
     };

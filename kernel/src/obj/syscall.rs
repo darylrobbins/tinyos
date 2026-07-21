@@ -2,8 +2,9 @@
 //! (status, value). Numbers are stable once shipped — append, never renumber.
 //!
 //! User pointers are validated against the caller's recorded mappings, then
-//! dereferenced directly: the caller's TTBR1 is active on this CPU and PAN
-//! is clear, so user memory is plainly addressable during its own syscall.
+//! copied via the arch's unprivileged accessors (aarch64: ldtr/sttr): the
+//! caller's TTBR1 is active on this CPU, and with PAN enabled those are the
+//! only instructions that may touch user memory from EL1.
 
 #![allow(dead_code)]
 
@@ -103,7 +104,7 @@ fn copy_in(va: u64, len: u64) -> Result<Vec<u8>, u32> {
     if !g.user_buf_ok(va, len, false) {
         return Err(ST_INVALID_ARGS);
     }
-    unsafe { core::ptr::copy_nonoverlapping(va as *const u8, v.as_mut_ptr(), len as usize) };
+    unsafe { crate::arch::uaccess::copy_from_user(v.as_mut_ptr(), va, len as usize) };
     drop(g);
     Ok(v)
 }
@@ -115,7 +116,7 @@ fn copy_out(va: u64, bytes: &[u8]) -> Result<(), u32> {
     if !g.user_buf_ok(va, bytes.len() as u64, true) {
         return Err(ST_INVALID_ARGS);
     }
-    unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), va as *mut u8, bytes.len()) };
+    unsafe { crate::arch::uaccess::copy_to_user(va, bytes.as_ptr(), bytes.len()) };
     Ok(())
 }
 
@@ -536,14 +537,15 @@ fn sys_process_exec(
             .filter(|s| !s.is_empty())
             .unwrap_or(&path),
     );
-    // Confine to the flat /apps namespace: the attested identity must be the
-    // real path, so `/apps/../evil` (basename "evil") or a trailing slash can't
-    // masquerade. sh always runs `/apps/<name>`, so this rejects nothing real.
-    if path != alloc::format!("/apps/{name}") {
+    // Confine to the flat /system/apps namespace: the attested identity must be
+    // the real path, so `/system/apps/../evil` (basename "evil") or a trailing
+    // slash can't masquerade. sh always runs `/system/apps/<name>`, so this
+    // rejects nothing real. (Until the resolver lands, app code is OS-provided.)
+    if path != alloc::format!("/system/apps/{name}") {
         return Err(ST_INVALID_ARGS);
     }
 
-    // The KERNEL reads the app (ambient /apps, like SvcJob) — this is the
+    // The KERNEL reads the app (ambient /system/apps, like SvcJob) — this is the
     // attestation: identity comes from what the kernel resolved, not a claim.
     let elf = match crate::fs::read("/", &path) {
         Ok(e) => e,

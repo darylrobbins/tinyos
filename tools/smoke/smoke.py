@@ -215,7 +215,7 @@ def main():
         step("help (no truncation)", "help", "[out] commands:", "about tinyOS")
 
         # 4. Directory listing reaches the filesystem and lists the apps.
-        step("ls /apps", "ls /apps", " sh", " top")
+        step("ls /system/apps", "ls /system/apps", " sh", " top")
 
         # 5. ps: the `pid` process rows print only AFTER the whole thread list.
         #    Truncation mid-thread-list (the historical bug) never reaches them.
@@ -228,7 +228,7 @@ def main():
              "got 2 argument(s):", "[0] alpha", "[1] beta")
 
         # Kernel-attested identity: the process name the kernel logs on exec
-        # comes from the /apps basename it resolved and loaded (not an argv[0]
+        # comes from the /system/apps basename it resolved and loaded (not an argv[0]
         # claim) — see `kprintln!("tinyos: exec {name}")` in
         # kernel/src/obj/syscall.rs sys_process_exec. `hello` declares only
         # the `console` capability, so this run never opens a window and
@@ -291,9 +291,9 @@ def main():
         step("prompt live + focus kept after windowed launch", "help", "[out] commands:")
 
         # 11. Respawn: the boot default IS the userspace terminal now. `exit`
-        #     ends sh (apps/shell/src/main.rs:182); the terminal then exits
-        #     (Task 7) and the compositor must respawn a fresh one so the
-        #     desktop is never left shell-less. Assert output round-trips again.
+        #     ends sh (apps/shell/src/main.rs); the terminal then exits (detects
+        #     sh's process exit) and the compositor must respawn a fresh one so
+        #     the desktop is never left shell-less. Assert output round-trips again.
         print("smoke: > exit    (end sh -> terminal exits -> compositor respawns it)")
         qmp.type_line("exit")
         cur = serial.wait_for("userspace terminal exited — respawning", args.step_timeout, cur)
