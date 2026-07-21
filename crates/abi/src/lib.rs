@@ -12,6 +12,7 @@ pub mod broker;
 pub mod console;
 pub mod fs;
 pub mod keys;
+pub mod nexus;
 pub mod proc;
 pub mod syscall;
 pub mod tokens;

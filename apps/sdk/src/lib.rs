@@ -20,6 +20,7 @@ pub mod channel;
 pub mod console;
 pub mod entry;
 pub mod fs;
+pub mod nexus;
 pub mod proc;
 pub mod process;
 mod font8x8;

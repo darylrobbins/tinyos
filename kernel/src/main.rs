@@ -181,6 +181,9 @@ fn ui_thread_main() {
     let mut shell = ui::shell::Shell::new(fb.width, fb.height);
     kprintln!("tinyos: shell up");
     obj::usertest::boot_hook();
+    // Boot-spawn the userspace service supervisor (svcd); it fans out and
+    // supervises system services declared under /system/services.
+    crate::svc::boot_services();
 
     let mut events = alloc::vec::Vec::new();
     let mut deadline = 0u64;

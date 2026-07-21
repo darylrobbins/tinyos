@@ -18,6 +18,10 @@ static FS_SERVER: Mutex<Option<FsServer>> = Mutex::new(None);
 static PROC_SERVER: Mutex<Option<ProcServer>> = Mutex::new(None);
 static FS_BROKER_CLIENT: Mutex<Option<Arc<ChannelEnd>>> = Mutex::new(None);
 static PROC_BROKER_CLIENT: Mutex<Option<Arc<ChannelEnd>>> = Mutex::new(None);
+/// svcd's main-channel kernel end, parked for the supervisor's lifetime.
+/// (aarch64 only — no userspace supervisor off aarch64.)
+#[cfg_attr(not(target_arch = "aarch64"), allow(dead_code))]
+static SVCD_MAIN: Mutex<Option<Arc<ChannelEnd>>> = Mutex::new(None);
 
 /// Create the FS/PROC brokers. Call once at boot, before any process spawns.
 pub fn init() {
@@ -40,28 +44,59 @@ pub fn pump() {
 }
 
 /// Mint a fresh FS connection for an in-kernel spawner (direct, same-thread).
-#[allow(dead_code)] // broker-based spawning is deferred (powerbox not yet wired)
+#[cfg_attr(not(target_arch = "aarch64"), allow(dead_code))] // only boot_services (aarch64) mints today
 pub fn mint_fs() -> Handle {
     FS_SERVER.lock().as_mut().expect("svc::init before spawn").mint()
 }
 
 /// Mint a fresh PROC connection for an in-kernel spawner.
-#[allow(dead_code)] // broker-based spawning is deferred (powerbox not yet wired)
+#[allow(dead_code)] // in-kernel PROC minting is unused until a kernel spawner needs it
 pub fn mint_proc() -> Handle {
     PROC_SERVER.lock().as_mut().expect("svc::init before spawn").mint()
 }
 
 /// A transferable handle to the FS broker client end — grant to a userspace
 /// spawner so it can mint connections for its own children.
-#[allow(dead_code)] // broker-based spawning is deferred (powerbox not yet wired)
+#[cfg_attr(not(target_arch = "aarch64"), allow(dead_code))] // granted by boot_services (aarch64)
 pub fn fs_broker_handle() -> Handle {
     let c = FS_BROKER_CLIENT.lock().as_ref().expect("svc::init").clone();
     Handle::new(Object::Channel(c), RIGHTS_ALL)
 }
 
 /// A transferable handle to the PROC broker client end.
-#[allow(dead_code)] // broker-based spawning is deferred (powerbox not yet wired)
+#[cfg_attr(not(target_arch = "aarch64"), allow(dead_code))] // granted by boot_services (aarch64)
 pub fn proc_broker_handle() -> Handle {
     let c = PROC_BROKER_CLIENT.lock().as_ref().expect("svc::init").clone();
     Handle::new(Object::Channel(c), RIGHTS_ALL)
 }
+
+/// Boot-spawn the userspace service supervisor (`svcd`) from `/system/bin/svcd`,
+/// granting it a full-root FS connection + the FS/PROC brokers. Its main-channel
+/// end is parked in `SVCD_MAIN` for the process lifetime (dropping it would
+/// signal `PEER_CLOSED` to svcd's handle 1). Call once from the ui_thread after
+/// the scheduler + user paging are up. aarch64 only (userspace is aarch64-first).
+#[cfg(target_arch = "aarch64")]
+pub fn boot_services() {
+    use abi::bootstrap::{TAG_FS, TAG_FS_BROKER, TAG_PROC_BROKER};
+    let elf = match crate::fs::read("/", "/system/bin/svcd") {
+        Ok(e) => e,
+        Err(e) => {
+            kprintln!("svcd: /system/bin/svcd: {e}");
+            return;
+        }
+    };
+    let grants = alloc::vec![
+        (TAG_FS, mint_fs()),
+        (TAG_FS_BROKER, fs_broker_handle()),
+        (TAG_PROC_BROKER, proc_broker_handle()),
+    ];
+    match crate::obj::loader::spawn_with_grants(alloc::string::String::from("svcd"), &elf, &[], grants)
+    {
+        Ok((_proc, _tid, main_kern)) => *SVCD_MAIN.lock() = Some(main_kern),
+        Err(e) => kprintln!("svcd: spawn failed: {}", e.msg()),
+    }
+}
+
+/// No userspace supervisor off aarch64 (no EL0/ttbr1 machinery).
+#[cfg(not(target_arch = "aarch64"))]
+pub fn boot_services() {}

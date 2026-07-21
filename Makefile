@@ -71,15 +71,27 @@ build: apps
 # /system/apps (OS-provided) when the disk is created (see $(DISK) below).
 # aarch64 only for now (userspace is aarch64-first).
 APP_BINS := hello pixels solitaire greet tui progress view vi clock top edit sh terminal
+# System-service binaries: staged to /system/bin, declared by a sidecar
+# .manifest in /system/services, enabled via /local/registry/services/<name>.
+# svcd is the supervisor; heartbeatd/waiterd are the demo services.
+SVC_BINS := svcd heartbeatd waiterd
 STAGE    := $(BUILD)/stage
+APPREL   := apps/target/aarch64-unknown-none/release
 apps:
 ifeq ($(ARCH),aarch64)
 	cd apps && cargo build --release
 	# Stage fresh: drop any prior layout (incl. the pre-move flat apps/) so a
 	# renamed path or dropped binary can't linger and get baked into the image.
-	rm -rf $(STAGE)/apps $(STAGE)/system/apps
-	mkdir -p $(STAGE)/system/apps
-	$(foreach a,$(APP_BINS),cp apps/target/aarch64-unknown-none/release/$(a) $(STAGE)/system/apps/$(a);)
+	rm -rf $(STAGE)/apps $(STAGE)/system $(STAGE)/local/registry/services
+	mkdir -p $(STAGE)/system/apps $(STAGE)/system/bin $(STAGE)/system/services
+	mkdir -p $(STAGE)/local/registry/services
+	$(foreach a,$(APP_BINS),cp $(APPREL)/$(a) $(STAGE)/system/apps/$(a);)
+	$(foreach a,$(SVC_BINS),cp $(APPREL)/$(a) $(STAGE)/system/bin/$(a);)
+	# Service declarations + enable-state (baked via --populate).
+	printf 'service\nprovides:heartbeat\nstate\nrestart:on-failure\n' > $(STAGE)/system/services/heartbeatd.manifest
+	printf 'service\nrequires:heartbeat\nstate\nrestart:no\n' > $(STAGE)/system/services/waiterd.manifest
+	printf 'enabled\n' > $(STAGE)/local/registry/services/heartbeatd
+	printf 'enabled\n' > $(STAGE)/local/registry/services/waiterd
 endif
 
 mkfs:
@@ -92,7 +104,8 @@ mkfs:
 SEED_DIRS := \
   /system/bin /system/apps /system/share /system/defaults /system/services \
   /local/bin /local/apps /local/share /local/services /local/config \
-  /local/state /local/cache /local/log /local/secrets /local/registry /local/shared \
+  /local/state /local/cache /local/log /local/secrets /local/registry \
+  /local/registry/services /local/shared \
   /users/user/Documents /users/user/Downloads /users/user/Pictures \
   /users/user/Music /users/user/Video /users/user/Templates \
   /users/user/bin /users/user/apps /users/user/share /users/user/apps.data \
@@ -110,6 +123,11 @@ $(DISK): | mkfs apps
 # the disk first if it doesn't exist yet (fresh checkout/worktree).
 sync-apps: mkfs apps | $(DISK)
 	$(foreach a,$(APP_BINS),$(MKFS) put $(DISK) $(STAGE)/system/apps/$(a) /system/apps/$(a);)
+	$(foreach a,$(SVC_BINS),$(MKFS) put $(DISK) $(STAGE)/system/bin/$(a) /system/bin/$(a);)
+	$(MKFS) put $(DISK) $(STAGE)/system/services/heartbeatd.manifest /system/services/heartbeatd.manifest
+	$(MKFS) put $(DISK) $(STAGE)/system/services/waiterd.manifest /system/services/waiterd.manifest
+	$(MKFS) put $(DISK) $(STAGE)/local/registry/services/heartbeatd /local/registry/services/heartbeatd
+	$(MKFS) put $(DISK) $(STAGE)/local/registry/services/waiterd /local/registry/services/waiterd
 
 # Seed/refresh the default directory tree in an existing image (idempotent;
 # VM off). Creates the disk first if missing. User files survive.

@@ -12,7 +12,10 @@ use crate::console::Console;
 use crate::syscall::*;
 
 /// Bootstrap grant tags (from the shared abi crate).
-pub use abi::bootstrap::{TAG_CONSOLE, TAG_FS, TAG_FS_BROKER, TAG_PROC, TAG_PROC_BROKER, TAG_SHELL};
+pub use abi::bootstrap::{
+    TAG_CONSOLE, TAG_FS, TAG_FS_BROKER, TAG_FS_SCRATCH, TAG_NEXUS, TAG_PROC, TAG_PROC_BROKER,
+    TAG_SHELL,
+};
 
 /// Everything an app receives at startup. Channel(0) = grant absent.
 pub struct Env {
@@ -23,6 +26,10 @@ pub struct Env {
     pub proc: Channel,
     pub fs_broker: Channel,
     pub proc_broker: Channel,
+    /// The Nexus (named-service registry) client — services receive this.
+    pub nexus: Channel,
+    /// An ephemeral scratch-dir FS connection (`/tmp/<svc>`) — services only.
+    pub fs_scratch: Channel,
 }
 
 use abi::bootstrap::MAIN_CHANNEL;
@@ -59,6 +66,8 @@ fn parse_bootstrap(msg: &Msg) -> Env {
     let mut proc = Channel(0);
     let mut fs_broker = Channel(0);
     let mut proc_broker = Channel(0);
+    let mut nexus = Channel(0);
+    let mut fs_scratch = Channel(0);
     for i in 0..grant_count {
         let tag = u32at(b, off);
         off += 4;
@@ -70,6 +79,8 @@ fn parse_bootstrap(msg: &Msg) -> Env {
             TAG_PROC => proc = Channel(handle),
             TAG_FS_BROKER => fs_broker = Channel(handle),
             TAG_PROC_BROKER => proc_broker = Channel(handle),
+            TAG_NEXUS => nexus = Channel(handle),
+            TAG_FS_SCRATCH => fs_scratch = Channel(handle),
             _ => {}
         }
     }
@@ -79,7 +90,7 @@ fn parse_bootstrap(msg: &Msg) -> Env {
     if proc.0 != 0 {
         crate::proc::set_client(proc);
     }
-    Env { args, console, shell, fs, proc, fs_broker, proc_broker }
+    Env { args, console, shell, fs, proc, fs_broker, proc_broker, nexus, fs_scratch }
 }
 
 /// Called by the `app!`-generated `_start`. Never returns.
@@ -95,6 +106,8 @@ pub fn run(main: fn(Env) -> i32) -> ! {
             proc: Channel(0),
             fs_broker: Channel(0),
             proc_broker: Channel(0),
+            nexus: Channel(0),
+            fs_scratch: Channel(0),
         },
     };
     unsafe {
