@@ -215,7 +215,7 @@ def main():
         step("help (no truncation)", "help", "[out] commands:", "about tinyOS")
 
         # 4. Directory listing reaches the filesystem and lists the apps.
-        step("ls /apps", "ls /apps", " sh", " top")
+        step("ls /system/apps", "ls /system/apps", " sh", " top")
 
         # 5. ps: the `pid` process rows print only AFTER the whole thread list.
         #    Truncation mid-thread-list (the historical bug) never reaches them.
@@ -228,7 +228,7 @@ def main():
              "got 2 argument(s):", "[0] alpha", "[1] beta")
 
         # Kernel-attested identity: the process name the kernel logs on exec
-        # comes from the /apps basename it resolved and loaded (not an argv[0]
+        # comes from the /system/apps basename it resolved and loaded (not an argv[0]
         # claim) — see `kprintln!("tinyos: exec {name}")` in
         # kernel/src/obj/syscall.rs sys_process_exec. `hello` declares only
         # the `console` capability, so this run never opens a window and
@@ -299,7 +299,7 @@ def main():
         time.sleep(0.4)
         qmp.type_line("uterm")
         cur = serial.wait_for("uterm launched", args.step_timeout, cur)
-        time.sleep(0.6)   # let /apps/terminal spawn sh
+        time.sleep(0.6)   # let /system/apps/terminal spawn sh
         if serial.panic:
             raise AssertionError("panic after launching uterm")
         print("smoke: uterm launched cleanly")

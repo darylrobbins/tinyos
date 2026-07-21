@@ -39,7 +39,7 @@ pub struct Terminal {
     bg_jobs: Vec<RunningApp>,
     /// Visible rows in cells (from the hosting card), for OP_RESIZE.
     rows: usize,
-    /// True when the foreground app is the userspace shell `/apps/sh` (the
+    /// True when the foreground app is the userspace shell `/system/apps/sh` (the
     /// default). It is re-launched when it exits. False = in-kernel fallback
     /// interpreter (sh unavailable, e.g. diskless boot or non-aarch64).
     shell_session: bool,
@@ -117,7 +117,9 @@ impl Terminal {
             view: TextView::console(SCROLLBACK, FG, argb(210, 228, 228, 236)),
             history: Vec::new(),
             hist_idx: None,
-            cwd: "/".to_string(),
+            // Interactive sessions start in the (single, pre-login) user's home,
+            // not the machine root. Login will set this per session.
+            cwd: "/users/user".to_string(),
             running: None,
             bg_jobs: Vec::new(),
             rows: 24,
@@ -335,7 +337,7 @@ impl Terminal {
                     ("spin [n]", "spawn n busy threads on cores 1-3"),
                     ("ps", "list threads and processes"),
                     ("kill <id>", "stop a thread"),
-                    ("run <name> [&]", "run an app from /apps (& = background)"),
+                    ("run <name> [&]", "run an app from /system/apps (& = background)"),
                     ("jobs", "list running apps"),
                     ("ls [path]", "list directory"),
                     ("cat <file>", "print file contents"),
@@ -346,7 +348,7 @@ impl Terminal {
                     ("touch <file>", "create an empty file"),
                     ("mkdir <dir>", "create a directory"),
                     ("rm [-r] <path>", "remove a file or directory"),
-                    ("cp <from> <to>", "copy a file (cp app /apps/name installs it)"),
+                    ("cp <from> <to>", "copy a file (cp app /system/apps/name installs it)"),
                     ("mv <from> <to>", "move or rename"),
                     ("cd [dir]", "change directory"),
                     ("pwd", "print working directory"),
@@ -625,9 +627,9 @@ impl Terminal {
         }
     }
 
-    /// Load and run an app from /apps/<name> with argv. A trailing `&`
+    /// Load and run an app from /system/apps/<name> with argv. A trailing `&`
     /// runs it in the background (output prefixed, input stays here).
-    /// Launch `/apps/sh` as the terminal's shell. On success it becomes the
+    /// Launch `/system/apps/sh` as the terminal's shell. On success it becomes the
     /// foreground app that owns the console; on failure the caller falls back
     /// to the in-kernel command interpreter. aarch64 only.
     fn launch_shell(&mut self) -> bool {
@@ -642,7 +644,7 @@ impl Terminal {
     }
 
     /// The in-kernel `run` builtin (fallback shell only). Spawns an app from
-    /// /apps, foreground unless a trailing `&`.
+    /// /system/apps, foreground unless a trailing `&`.
     fn run_app(&mut self, args: &str) {
         let (args, background) = match args.trim().strip_suffix('&') {
             Some(rest) => (rest.trim(), true),
@@ -670,7 +672,7 @@ impl Terminal {
         }
     }
 
-    /// Spawn `/apps/<name>` with argv, wiring its console/fs/proc services
+    /// Spawn `/system/apps/<name>` with argv, wiring its console/fs/proc services
     /// and window channel. Foreground apps take over the console; background
     /// ones join `bg_jobs`. Returns the thread id.
     #[cfg(target_arch = "aarch64")]
@@ -682,7 +684,7 @@ impl Terminal {
             TAG_CONSOLE, TAG_FS, TAG_FS_BROKER, TAG_PROC, TAG_PROC_BROKER, TAG_SHELL,
         };
 
-        let elf = crate::fs::read("/", &format!("/apps/{name}")).map_err(|e| format!("{e}"))?;
+        let elf = crate::fs::read("/", &format!("/system/apps/{name}")).map_err(|e| format!("{e}"))?;
 
         // Console + shell channels: this terminal keeps the kernel ends.
         let (console_app, console_kern) = create();

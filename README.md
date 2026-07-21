@@ -34,8 +34,8 @@ no problems.
 - **tinyfs**, a native copy-on-write filesystem on virtio-blk: shadow-paging
   checkpoints (crash-consistent by construction — the test suite replays
   every write-log cut point), files persist across reboots in `disk.img`.
-  Host-side `mkfs-tinyfs` tool; `make sync-apps` updates `/apps` in place
-  without touching user files.
+  Host-side `mkfs-tinyfs` tool; `make sync-apps` updates `/system/apps` in
+  place without touching user files.
 - Interrupt-driven and tickless: GICv3 (arm64) / LAPIC+IOAPIC (x86_64),
   one-shot timers, idle CPUs in wfi/hlt at ~0 host CPU. Cooperative SMP
   scheduler on 4 cores, a bitmap frame allocator over the UEFI memory map,
@@ -62,7 +62,7 @@ make run ARCH=x86_64  # x86_64, emulated (no userspace yet on this arch)
 Hypervisor.framework. Serial output lands on stdout. If HVF gives you
 trouble: `make run ACCEL="-accel tcg -cpu cortex-a72"`.
 
-After changing an app: `make sync-apps` refreshes `/apps` inside the disk
+After changing an app: `make sync-apps` refreshes `/system/apps` inside the disk
 image in place (user files survive). `make test` runs the host-side suites
 (tinyfs crash consistency, textui, vicore, solitaire) and checks both
 kernel targets compile.

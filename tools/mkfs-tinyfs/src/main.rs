@@ -2,6 +2,7 @@
 //!
 //!   mkfs-tinyfs create <img> [--size 64M] [--populate <dir>]
 //!   mkfs-tinyfs put   <img> <host-file> <fs-path>
+//!   mkfs-tinyfs mkdir <img> <fs-path>...
 //!   mkfs-tinyfs ls    <img> [path]
 //!   mkfs-tinyfs cat   <img> <path>
 //!   mkfs-tinyfs check <img>
@@ -68,6 +69,7 @@ fn usage() -> ! {
     eprintln!(
         "usage: mkfs-tinyfs create <img> [--size 64M] [--populate <dir>]\n\
          \x20      mkfs-tinyfs put   <img> <host-file> <fs-path>\n\
+         \x20      mkfs-tinyfs mkdir <img> <fs-path>...\n\
          \x20      mkfs-tinyfs ls    <img> [path]\n\
          \x20      mkfs-tinyfs cat   <img> <path>\n\
          \x20      mkfs-tinyfs check <img>"
@@ -179,6 +181,29 @@ fn main() {
             fs.write("/", path, &data, false)
                 .unwrap_or_else(|e| fail(&format!("write {path}: {e}")));
             println!("{img}: put {} ({} bytes)", path, data.len());
+        }
+        Some("mkdir") => {
+            // Create one or more directories (with parents), idempotently.
+            // Used to seed the default directory tree at image-creation time.
+            let img = args.get(1).unwrap_or_else(|| usage());
+            if args.len() < 3 {
+                usage();
+            }
+            let mut fs = open_fs(img, true);
+            for path in &args[2..] {
+                let mut dir = String::new();
+                for part in path.trim_matches('/').split('/') {
+                    if part.is_empty() {
+                        continue;
+                    }
+                    dir = format!("{dir}/{part}");
+                    match fs.mkdir("/", &dir) {
+                        Ok(()) | Err(FsError::Exists) => {}
+                        Err(e) => fail(&format!("mkdir {dir}: {e}")),
+                    }
+                }
+            }
+            println!("{img}: mkdir {}", &args[2..].join(" "));
         }
         Some("ls") => {
             let img = args.get(1).unwrap_or_else(|| usage());

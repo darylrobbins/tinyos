@@ -10,6 +10,26 @@ use alloc::sync::Arc;
 use crate::obj::channel::ChannelEnd;
 use crate::obj::process::Process;
 
+/// The single implicit user profile until a login system exists. Launcher-
+/// spawned apps are jailed under this user's home; login will replace it with
+/// the current session's user.
+const DEFAULT_USER: &str = "user";
+
+/// Create every level of an absolute path, tolerating already-existing dirs.
+/// tinyfs `mkdir` is non-recursive, so the launcher walks the chain itself
+/// (e.g. `/users/user/apps.data/edit` → `/users`, `/users/user`, …).
+fn mkdir_p(path: &str) {
+    let mut acc = String::new();
+    for part in path.trim_matches('/').split('/') {
+        if part.is_empty() {
+            continue;
+        }
+        acc.push('/');
+        acc.push_str(part);
+        let _ = crate::fs::mkdir("/", &acc);
+    }
+}
+
 pub struct SvcJob {
     pub name: String,
     process: Arc<Process>,
@@ -20,20 +40,24 @@ pub struct SvcJob {
 }
 
 impl SvcJob {
-    /// Load /apps/<name> and spawn it as a shell-hosted (windowed) app,
+    /// Load /system/apps/<name> and spawn it as a shell-hosted (windowed) app,
     /// granting the app's declared caps intersected with launcher policy:
-    /// FS only inside /data/<name> or /shared/*, proc without kill. Caps are
+    /// FS only inside /users/<user>/apps.data/<name> or /local/shared/*, proc
+    /// without kill. Caps are
     /// least-privilege: an app that declares nothing gets nothing (the loader
     /// fails closed), so a launched app receives exactly what it declared ∩ policy.
     pub fn spawn(name: &str, argv: &[String]) -> Result<Self, String> {
-        let elf = crate::fs::read("/", &format!("/apps/{name}"))
+        let elf = crate::fs::read("/", &format!("/system/apps/{name}"))
             .map_err(|e| format!("{e}"))?;
         let m = crate::obj::loader::manifest(&elf);
 
         // FS policy: "self" (or an explicit path equal to it) means the
-        // app's private data dir; /shared subtrees are granted on request.
+        // app's private data dir; /local/shared subtrees are granted on request.
         // Anything else is denied — the powerbox will cover it later.
-        let selfdir = format!("/data/{name}");
+        //
+        // TODO(multi-user): DEFAULT_USER is a single implicit profile until
+        // login exists; the session will supply the current user's home.
+        let selfdir = format!("/users/{DEFAULT_USER}/apps.data/{name}");
         let mut jail = None;
         for req in &m.fs {
             // Canonicalize before the policy check: the jail string is used
@@ -50,8 +74,8 @@ impl SvcJob {
                 }
             };
             let ok = target == selfdir
-                || target == "/shared"
-                || target.starts_with("/shared/");
+                || target == "/local/shared"
+                || target.starts_with("/local/shared/");
             if !ok {
                 kprintln!("{name}: fs grant denied: {target}");
             } else if jail.is_some() {
@@ -61,9 +85,15 @@ impl SvcJob {
             }
         }
         if let Some(j) = &jail {
-            let _ = crate::fs::mkdir("/", "/data");
-            let _ = crate::fs::mkdir("/", "/shared");
-            let _ = crate::fs::mkdir("/", j);
+            // tinyfs mkdir is non-recursive: walk the whole parent chain.
+            mkdir_p(j);
+            if *j == selfdir {
+                // Seed the app's private layout: inside its jail the app sees
+                // /config /data /cache /state as its own root ("/").
+                for sub in ["config", "data", "cache", "state"] {
+                    let _ = crate::fs::mkdir("/", &format!("{j}/{sub}"));
+                }
+            }
         }
 
         let grants = crate::obj::loader::GrantSet {

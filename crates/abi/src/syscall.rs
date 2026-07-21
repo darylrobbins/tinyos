@@ -26,7 +26,7 @@ pub const SYS_ABI_VERSION: u64 = 12;
 /// of the child's main channel). Returns the child's thread id.
 pub const SYS_PROCESS_SPAWN: u64 = 13;
 /// Like SYS_PROCESS_SPAWN, but the kernel loads the app BY PATH (argv[0]),
-/// attesting identity from the resolved /apps basename. flags bit 0 =
+/// attesting identity from the resolved /system/apps basename. flags bit 0 =
 /// EXEC_REQUEST_WINDOW: mint a window under the attested identity (honored iff
 /// the app's manifest declares `window`).
 pub const SYS_PROCESS_EXEC: u64 = 16;
