@@ -37,6 +37,20 @@ use self::palette::{Action, LauncherHit, Palette};
 use self::tokens::*;
 use super::cursor;
 
+/// How soon after launch a default-terminal exit counts as a crash (µs).
+const DEFAULT_TERM_FAST_CRASH_US: u64 = 3_000_000;
+/// Consecutive fast crashes before giving up on the userspace terminal.
+const DEFAULT_TERM_MAX_FAST_CRASHES: u32 = 3;
+
+/// Respawn bookkeeping for the boot-default userspace terminal. `None` when the
+/// default is the in-kernel fallback (never exits) or respawn has given up.
+struct DefaultTerm {
+    /// Uptime (µs) when the current default terminal was launched.
+    launched_us: u64,
+    /// Consecutive exits within `DEFAULT_TERM_FAST_CRASH_US` of launch.
+    fast_crashes: u32,
+}
+
 pub struct Window {
     pub rect: Rect,
     pub app: Box<dyn App>,
@@ -123,6 +137,8 @@ pub struct Shell {
     pending: Vec<extern_app::PendingApp>,
     /// Launcher-spawned SDK apps whose services the shell pumps.
     svc_jobs: Vec<svc::SvcJob>,
+    /// Set when the boot default is the userspace terminal; drives respawn.
+    default_term: Option<DefaultTerm>,
 }
 
 impl Shell {
@@ -151,6 +167,7 @@ impl Shell {
             last_input_us: 0,
             pending: Vec::new(),
             svc_jobs: Vec::new(),
+            default_term: None,
         };
         // Boot into the userspace terminal where it can run (aarch64 with
         // /apps/terminal present); otherwise fall back to the in-kernel
@@ -595,6 +612,11 @@ impl Shell {
             Ok((_p, tid, _main)) => {
                 if as_default {
                     crate::ui::shell::extern_app::register_default(shell_kern, "Terminal".into());
+                    let fast = self.default_term.as_ref().map_or(0, |d| d.fast_crashes);
+                    self.default_term = Some(DefaultTerm {
+                        launched_us: crate::arch::timer::uptime_us(),
+                        fast_crashes: fast,
+                    });
                 } else {
                     crate::ui::shell::extern_app::register(shell_kern, "Terminal".into(), true);
                 }
@@ -674,17 +696,48 @@ impl Shell {
         }
         let mut i = 0;
         while i < self.windows.len() {
-            let closed = self.windows[i]
+            let (closed, was_default) = match self.windows[i]
                 .app
                 .as_any()
                 .downcast_mut::<extern_app::ExternApp>()
-                .is_some_and(extern_app::ExternApp::pump);
+            {
+                Some(a) => (a.pump(), a.is_default()),
+                None => (false, false),
+            };
             if closed {
                 self.windows.remove(i);
                 self.focus_topmost_visible();
+                if was_default {
+                    self.respawn_default_terminal();
+                }
             } else {
                 i += 1;
             }
+        }
+    }
+
+    /// The boot-default terminal window exited. Respawn it, unless it has been
+    /// crash-looping — then fall back to the in-kernel terminal so the desktop
+    /// always has a working shell rather than a spinning respawn.
+    fn respawn_default_terminal(&mut self) {
+        let now = crate::arch::timer::uptime_us();
+        let fast = if let Some(dt) = self.default_term.as_mut() {
+            if now.saturating_sub(dt.launched_us) < DEFAULT_TERM_FAST_CRASH_US {
+                dt.fast_crashes += 1;
+            } else {
+                dt.fast_crashes = 0;
+            }
+            dt.fast_crashes
+        } else {
+            return; // default is the kernel terminal (or gave up): nothing to do
+        };
+        if fast >= DEFAULT_TERM_MAX_FAST_CRASHES {
+            kprintln!("tinyos: userspace terminal crash-looping — falling back to kernel terminal");
+            self.default_term = None;
+            self.open(Box::new(crate::apps::terminal::TerminalApp::new()), true);
+        } else {
+            kprintln!("tinyos: userspace terminal exited — respawning");
+            self.launch_uterm(true); // preserves fast_crashes via the record above
         }
     }
 
