@@ -737,7 +737,13 @@ impl Shell {
             self.open(Box::new(crate::apps::terminal::TerminalApp::new()), true);
         } else {
             kprintln!("tinyos: userspace terminal exited — respawning");
-            self.launch_uterm(true); // preserves fast_crashes via the record above
+            if !self.launch_uterm(true) {
+                // Re-launch failed (e.g. /apps/terminal became unreadable):
+                // don't leave the desktop shell-less — fall back to the
+                // in-kernel terminal, same as the crash-loop give-up.
+                self.default_term = None;
+                self.open(Box::new(crate::apps::terminal::TerminalApp::new()), true);
+            }
         }
     }
 
